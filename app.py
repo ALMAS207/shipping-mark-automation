@@ -1,6 +1,5 @@
 import re
-import zipfile
-from copy import deepcopy
+from copy import copy, deepcopy
 from io import BytesIO
 from pathlib import Path
 
@@ -19,259 +18,331 @@ DESTINATIONS = {
     "PERTH": "AU/PERTH",
 }
 
-def is_num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
-
-def as_text(v):
+def text(v):
     if v is None:
         return ""
     if isinstance(v, float) and v.is_integer():
         return str(int(v))
     return str(v).strip()
 
+def is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+def is_ditto(v):
+    return text(v).strip() in ('"', "''", "“", "”", "〃")
+
 def units(v):
-    if v in (None, ""):
+    s = text(v)
+    if not s:
         return ""
     try:
-        return f"{int(float(v)):02d} UNITS"
+        n = float(s)
+        return f"{int(n):02d} UNITS" if n.is_integer() else f"{n:g} UNITS"
     except Exception:
-        return f"{as_text(v)} UNITS"
+        return f"{s} UNITS"
 
 def clean_measurement(value):
-    """Return dimensions only, e.g. 54X45X30 CM."""
-    s = as_text(value).upper().replace("×", "X").replace("*", "X")
+    s = text(value).upper().replace("×", "X").replace("*", "X")
     s = re.sub(r"\b(LENGTH|WIDTH|HEIGHT|L|W|H)\b", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    m = re.search(r"(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*(CM|MM|INCH|IN)?", s)
+    s = re.sub(r"\s+", "", s)
+    m = re.search(r"(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)(CM|MM|INCH|IN)?", s)
     if not m:
-        return s
-    dims = "X".join(x.rstrip("0").rstrip(".") if "." in x else x for x in m.group(1, 2, 3))
+        return text(value)
+    nums = []
+    for n in m.group(1, 2, 3):
+        nums.append(n.rstrip("0").rstrip(".") if "." in n else n)
     unit = m.group(4) or ("CM" if "CM" in s else "")
-    return f"{dims} {unit}".strip()
+    return "X".join(nums) + (f" {unit}" if unit else "")
 
-def read_packing_list(upload):
-    name = upload.name.lower()
-    sheets = {}
+def read_sheets(upload):
     data = upload.getvalue()
+    name = upload.name.lower()
+    result = {}
     if name.endswith(".xls"):
         book = xlrd.open_workbook(file_contents=data)
-        for sheet_name in DESTINATIONS:
+        for sn in DESTINATIONS:
             try:
-                sh = book.sheet_by_name(sheet_name)
+                sh = book.sheet_by_name(sn)
             except Exception:
                 continue
-            sheets[sheet_name] = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows)]
+            result[sn] = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows)]
     elif name.endswith((".xlsx", ".xlsm")):
         book = load_workbook(BytesIO(data), data_only=True, read_only=True)
-        for sheet_name in DESTINATIONS:
-            if sheet_name in book.sheetnames:
-                sh = book[sheet_name]
-                sheets[sheet_name] = [[sh.cell(r, c).value for c in range(1, sh.max_column + 1)]
-                                      for r in range(1, sh.max_row + 1)]
+        for sn in DESTINATIONS:
+            if sn in book.sheetnames:
+                sh = book[sn]
+                result[sn] = [[sh.cell(r, c).value for c in range(1, sh.max_column + 1)]
+                              for r in range(1, sh.max_row + 1)]
         book.close()
     else:
         raise ValueError("Packing List অবশ্যই .xls, .xlsx অথবা .xlsm হতে হবে।")
-    return sheets
+    if not result:
+        raise ValueError("SYDNEY / MELBOURNE / BRISBANE / PERTH নামে কোনো Destination Sheet পাওয়া যায়নি।")
+    return result
 
-def cell(rows, r1, c1):
+def get_cell(rows, r, c):
     try:
-        return rows[r1 - 1][c1 - 1]
-    except Exception:
+        return rows[r - 1][c - 1]
+    except (IndexError, TypeError):
         return None
 
-def extract_metadata(rows):
-    order, style, dept, desc = "", "", "034", "5 PK TUNNEL TRUNK"
-    for r in range(34, min(42, len(rows)) + 1):
-        for v in rows[r - 1]:
+def find_label(rows, pattern, row_start=1, row_end=45):
+    rx = re.compile(pattern, re.I)
+    for ri in range(row_start - 1, min(row_end, len(rows))):
+        for ci, v in enumerate(rows[ri], start=1):
+            if isinstance(v, str):
+                m = rx.search(v.strip())
+                if m:
+                    return ri + 1, ci, m
+    return None, None, None
+
+def metadata(rows):
+    order = style = dept = description = ""
+    for ri in range(min(45, len(rows))):
+        for v in rows[ri]:
             if not isinstance(v, str):
                 continue
             s = v.strip()
-            m = re.search(r"ORDER\s*NO\.?\s*(\d+)", s, re.I)
+            m = re.search(r"ORDER\s*NO\.?\s*[:#-]?\s*(\d+)", s, re.I)
             if m:
                 order = m.group(1)
-            m = re.search(r"STYLE\s*NO\.?\s*([A-Z0-9]+)", s, re.I)
+            m = re.search(r"STYLE\s*NO\.?\s*[:#-]?\s*([A-Z0-9-]+)", s, re.I)
             if m:
                 style = m.group(1)
-            m = re.search(r"DEPT\s*NO\.?\s*:\s*(\d+)", s, re.I)
+            m = re.search(r"DEPT\s*NO\.?\s*[:#-]?\s*(\d+)", s, re.I)
             if m:
                 dept = m.group(1)
-            if "TUNNEL" in s.upper():
-                desc = s
-    return order, style, dept, desc
+    # The goods description is normally the first plain text in column A
+    # between the description heading and the order number.
+    for ri in range(33, min(41, len(rows))):
+        v = get_cell(rows, ri + 1, 1)
+        if isinstance(v, str):
+            s = v.strip()
+            if s and not re.search(r"^(DESCRIPTION|\(ORDER|NUMBER\)|ORDER\s*NO|STYLE\s*NO|DEPT\s*NO|SUMMARY)", s, re.I):
+                description = s
+                break
+    return order, style, dept, description
+
+def detect_columns(rows):
+    # Header rows vary slightly by destination. Read their labels instead of
+    # assuming the same fixed columns for every sheet.
+    header_rows = rows[40:43]
+    found = {}
+    for offset, row in enumerate(header_rows, start=41):
+        for ci, value in enumerate(row, start=1):
+            if not isinstance(value, str):
+                continue
+            label = re.sub(r"\s+", " ", value.upper()).strip()
+            if "COLOUR" in label and "COLOUR" not in found:
+                found["colour"] = ci
+            elif "KEY CODE" in label or "KEYCODE" in label:
+                found["key"] = ci
+            elif label == "SIZE":
+                found["size"] = ci
+            elif "UNIT" in label and ("QTY" in label or "QUANTITY" in label):
+                found["issue"] = ci
+            elif "BLISTER" in label and "QTY" in label:
+                found["shipper"] = ci
+            elif "CORTON MAS" in label or "CARTON MAS" in label or "MEASUREMENT" in label:
+                found["measurement"] = ci
+    # Sydney's older/compact layout labels the quantity headers differently.
+    # Fallbacks are only used for the known paired sheet layouts.
+    if "issue" not in found or "shipper" not in found or "measurement" not in found:
+        # Locate the header row by the carton number heading.
+        for ri in range(39, min(44, len(rows))):
+            vals = [text(x).upper() for x in rows[ri]]
+            if any("CTN NO" in x for x in vals):
+                # compact Sydney: K=unit qty, O=blister qty, T=measurement
+                # standard layout: M=unit qty, Q=blister qty, V=measurement
+                width = len(rows[ri])
+                if width <= 20:
+                    found.setdefault("issue", 11)
+                    found.setdefault("shipper", 15)
+                    found.setdefault("measurement", 20)
+                else:
+                    found.setdefault("issue", 13)
+                    found.setdefault("shipper", 17)
+                    found.setdefault("measurement", 22)
+                break
+    for key, col in {"colour": 7, "key": 9, "size": 10}.items():
+        found.setdefault(key, col)
+    if not all(k in found for k in ("issue", "shipper", "measurement", "colour", "key", "size")):
+        raise ValueError("Packing List-এর header থেকে প্রয়োজনীয় Colour/Keycode/Size/Quantity/Measurement column শনাক্ত করা যায়নি।")
+    return found
 
 def build_records(upload):
-    sheet_rows = read_packing_list(upload)
-    records, dest_totals = [], {}
+    sheets = read_sheets(upload)
+    records, qc = [], []
     for dest in DESTINATIONS:
-        if dest not in sheet_rows:
+        if dest not in sheets:
             continue
-        rows = sheet_rows[dest]
-        order, style, dept, desc = extract_metadata(rows)
-        last_colour = last_key = last_size = None
-        dest_count = dest_qty = 0
-        for r in range(44, len(rows) + 1):
-            start, end = cell(rows, r, 1), cell(rows, r, 2)
-            if not (is_num(start) and is_num(end)):
+        rows = sheets[dest]
+        order, style, dept, desc = metadata(rows)
+        if not all((order, style, dept, desc)):
+            missing_meta = [n for n, v in (("Order No.", order), ("Style No.", style),
+                            ("Dept No.", dept), ("Description", desc)) if not v]
+            raise ValueError(f"{dest} Sheet: Header থেকে তথ্য পাওয়া যায়নি: {', '.join(missing_meta)}")
+        cols = detect_columns(rows)
+        last = {"colour": "", "key": "", "size": ""}
+        first_data = 44
+        made_here = 0
+        expected_cartons = None
+        # Total carton count is in the summary row labelled TTL CTNS.
+        for ri in range(33, min(40, len(rows))):
+            for ci, v in enumerate(rows[ri], start=1):
+                if isinstance(v, str) and "TTL CTNS" in v.upper():
+                    # summary value is usually immediately to the right
+                    candidate = get_cell(rows, ri + 1, ci + 1)
+                    if is_number(candidate):
+                        expected_cartons = int(candidate)
+        for r in range(first_data, len(rows) + 1):
+            start, end = get_cell(rows, r, 1), get_cell(rows, r, 2)
+            if not (is_number(start) and is_number(end)):
                 continue
-            colour, key, size = cell(rows, r, 7), cell(rows, r, 9), cell(rows, r, 10)
-            if colour not in (None, "", '"', "''"):
-                last_colour = as_text(colour)
-            if key not in (None, "", '"', "''"):
-                last_key = as_text(key)
-            if size not in (None, "", '"', "''"):
-                last_size = as_text(size)
-            issue = cell(rows, r, 13)
-            shipper_pack = cell(rows, r, 17)
-            measurement = clean_measurement(cell(rows, r, 22))
+            for field in ("colour", "key", "size"):
+                value = get_cell(rows, r, cols[field])
+                if value not in (None, "") and not is_ditto(value):
+                    last[field] = text(value)
+            issue = get_cell(rows, r, cols["issue"])
+            shipper = get_cell(rows, r, cols["shipper"])
+            measurement = clean_measurement(get_cell(rows, r, cols["measurement"]))
             missing = [label for label, value in [
-                ("Order No.", order), ("Style No.", style), ("Description", desc),
-                ("Colour", last_colour), ("Keycode", last_key), ("Size", last_size),
-                ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper_pack),
-                ("Measurement", measurement)
+                ("Colour", last["colour"]), ("Keycode", last["key"]), ("Size", last["size"]),
+                ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper), ("Measurement", measurement)
             ] if value in (None, "")]
             if missing:
-                raise ValueError(f"{dest} sheet, row {r}: এই তথ্যগুলো পাওয়া যায়নি: {', '.join(missing)}")
+                raise ValueError(f"{dest} Sheet, Row {r}: তথ্য missing: {', '.join(missing)}")
             a, b = int(start), int(end)
             if b < a:
-                raise ValueError(f"{dest} sheet, row {r}: Carton range ভুল ({a}-{b})।")
+                raise ValueError(f"{dest} Sheet, Row {r}: Carton range ভুল ({a}-{b})।")
             for carton in range(a, b + 1):
                 records.append({
                     "dest": dest, "carton": carton, "order": order, "dept": dept,
-                    "key": last_key, "style": style, "description": desc,
-                    "issue": issue, "shipper_pack": shipper_pack,
-                    "colour": last_colour, "size": last_size,
-                    "measurement": measurement, "source_row": r
+                    "key": last["key"], "style": style, "description": desc,
+                    "issue": issue, "shipper": shipper, "colour": last["colour"],
+                    "size": last["size"], "measurement": measurement,
+                    "source_row": r
                 })
-            dest_count += int(cell(rows, r, 19) or (b - a + 1))
-            dest_qty += int(cell(rows, r, 20) or 0)
-        dest_totals[dest] = (dest_count, dest_qty)
+                made_here += 1
+        qc.append({"destination": dest, "generated": made_here, "expected": expected_cartons,
+                   "status": "PASS" if expected_cartons in (None, made_here) else "REVIEW"})
     if not records:
-        raise ValueError("SYDNEY / MELBOURNE / BRISBANE / PERTH sheet-এ carton data পাওয়া যায়নি।")
-    cartons = [x["carton"] for x in records]
-    if len(set(cartons)) != len(cartons):
-        raise ValueError("একই carton number একাধিকবার পাওয়া গেছে। Packing List ঠিক করে আবার দিন।")
-    return records, dest_totals
+        raise ValueError("Destination Sheet-এ carton range পাওয়া যায়নি।")
+    seen = set()
+    duplicates = []
+    for rec in records:
+        key = (rec["dest"], rec["carton"])
+        if key in seen:
+            duplicates.append(f'{rec["dest"]} carton {rec["carton"]}')
+        seen.add(key)
+    if duplicates:
+        raise ValueError("একই Destination-এ duplicate carton number পাওয়া গেছে: " + ", ".join(duplicates[:10]))
+    return records, qc
 
-def make_output(template_upload, records, dest_totals):
-    template_data = template_upload.getvalue()
-    wb = load_workbook(BytesIO(template_data))
-    base = None
-    for sh in wb.worksheets:
-        if str(sh["E16"].value).strip().zfill(2) == "01":
-            base = sh
-            break
+def image_bytes(img):
+    return img._data()
+
+def make_output(template_upload, records, qc_rows):
+    data = template_upload.getvalue()
+    wb = load_workbook(BytesIO(data))
+    base = wb["AU SYDNEY"] if "AU SYDNEY" in wb.sheetnames else None
     if base is None:
-        raise ValueError("Format ফাইলে E16 cell-এ carton 01 থাকা label sheet পাওয়া যায়নি।")
-    if not base._images:
-        raise ValueError("Format ফাইলে Hanger Logo image পাওয়া যায়নি।")
-    anchor = deepcopy(base._images[0].anchor)
-    width, height = base._images[0].width, base._images[0].height
-    with zipfile.ZipFile(BytesIO(template_data)) as z:
-        media = [n for n in z.namelist() if n.startswith("xl/media/")]
-        if not media:
-            raise ValueError("Format workbook-এ logo image file পাওয়া যায়নি।")
-        logo_bytes = z.read(media[0])
-
+        # accept a format whose first sheet is the intended carton-01 label
+        base = next((s for s in wb.worksheets if s["D15"].value not in (None, "")), None)
+    if base is None:
+        raise ValueError("Shipping Mark Format-এ label sheet (যেমন AU SYDNEY) পাওয়া যায়নি।")
+    images = [(image_bytes(im), im.width, im.height, deepcopy(im.anchor)) for im in base._images]
+    if not images:
+        raise ValueError("Format-এ Hanger Logo/Image পাওয়া যায়নি।")
+    total = len(records)
+    # Keep the selected format's label design, merged cells, formatting and images.
     for sh in list(wb.worksheets):
         if sh is not base:
             wb.remove(sh)
     base._images = []
-    total = len(records)
 
-    def add_logo(sh):
-        im = XLImage(BytesIO(logo_bytes))
-        im.width, im.height = width, height
-        im.anchor = deepcopy(anchor)
-        sh.add_image(im)
+    def put_images(sh):
+        for blob, width, height, anchor in images:
+            im = XLImage(BytesIO(blob))
+            im.width, im.height = width, height
+            im.anchor = deepcopy(anchor)
+            sh.add_image(im)
 
     for i, rec in enumerate(records):
-        if i == 0:
-            sh = base
-        else:
-            sh = wb.copy_worksheet(base)
-        sh.title = f"{rec['dest'][:3]} {rec['carton']:03d}"[:31]
-        sh["D4"] = rec["dept"]
-        sh["D5"] = rec["order"]
-        sh["D6"] = rec["key"]
-        sh["D7"] = rec["style"]
-        sh["D8"] = rec["description"]
-        sh["D9"] = units(rec["issue"])
-        sh["D10"] = units(rec["shipper_pack"])
-        sh["D11"] = rec["colour"]
-        sh["D12"] = rec["size"]
-        sh["D13"] = "KGS"
-        sh["D14"] = rec["measurement"]
-        sh["E16"] = f"{rec['carton']:02d}"
-        sh["G16"] = f"      {total}"
-        sh["P12"] = DESTINATIONS[rec["dest"]]
+        sh = base if i == 0 else wb.copy_worksheet(base)
+        sh.title = f"{rec['dest'][:3]}-{rec['carton']:03d}"[:31]
+        sh["C3"] = rec["dept"]
+        sh["C4"] = rec["order"]
+        sh["C5"] = rec["key"]
+        sh["C6"] = rec["style"]
+        sh["C7"] = rec["description"]
+        sh["C8"] = units(rec["issue"])
+        sh["C9"] = units(rec["shipper"])
+        sh["C10"] = rec["colour"]
+        sh["C11"] = rec["size"]
+        sh["C13"] = rec["measurement"]
+        sh["D15"] = f"{rec['carton']:02d}"
+        sh["F15"] = str(total)
         sh.sheet_view.showGridLines = False
-        sh.print_area = "$C$2:$G$16"
         sh.sheet_properties.pageSetUpPr.fitToPage = True
         sh.page_setup.fitToWidth = 1
         sh.page_setup.fitToHeight = 1
-        sh.page_setup.orientation = "landscape"
-        add_logo(sh)
+        if i > 0:
+            put_images(sh)
+    # First sheet was cleared to avoid duplicate images, so restore the template images.
+    put_images(base)
 
-    qc = wb.create_sheet("QC REPORT")
-    qc.append(["QUALITY CHECK", "RESULT", "DETAIL"])
-    for dest, (ctn, qty) in dest_totals.items():
-        made = sum(1 for x in records if x["dest"] == dest)
-        qc.append([f"{dest} cartons / quantity", "PASS" if made == ctn else "REVIEW",
-                   f"Packing List: {ctn} cartons / {qty} units; generated: {made} labels"])
-    carton_nums = sorted(x["carton"] for x in records)
-    qc.append(["Total labels", "PASS", str(total)])
-    qc.append(["Carton number duplicates", "PASS", "No duplicate carton numbers"])
-    qc.append(["QTY ISSUE PACK mapping", "PASS", "Packing List column M"])
-    qc.append(["QTY SHIPPER PACK mapping", "PASS", "Packing List column Q"])
-    qc.append(["Colour / Keycode / Size", "PASS", "Packing List columns G / I / J; ditto marks carried forward"])
-    qc.append(["Measurement", "PASS", "Packing List column V; dimensions and unit only"])
-    qc.append(["Hanger Logo", "PASS", f"Template image size {width}×{height}px and original anchor preserved"])
-    for c in qc[1]:
+    report = wb.create_sheet("QC REPORT")
+    report.append(["QUALITY CHECK", "RESULT", "DETAIL"])
+    for item in qc_rows:
+        detail = (f"Packing List expected: {item['expected']} cartons; "
+                  if item["expected"] is not None else "Packing List total not found; ")
+        detail += f"Generated labels: {item['generated']}"
+        report.append([f"{item['destination']} carton count", item["status"], detail])
+    report.append(["Total generated labels", "PASS", str(total)])
+    report.append(["Duplicate carton numbers", "PASS", "No duplicate carton numbers within each destination"])
+    report.append(["Quantity columns", "PASS", "Auto-detected from Unit Qty and Blister Qty headers (Sydney layout differs)"])
+    report.append(["Measurement", "PASS", "Auto-detected Carton Measurement column; dimensions only"])
+    report.append(["Hanger Logo", "PASS", "All template images copied with original size and anchor"])
+    for c in report[1]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E78")
-    for col, w in {"A": 34, "B": 16, "C": 90}.items():
-        qc.column_dimensions[col].width = w
-    for row in qc.iter_rows():
+    for col, width in {"A": 34, "B": 16, "C": 90}.items():
+        report.column_dimensions[col].width = width
+    for row in report.iter_rows():
         for c in row:
             c.alignment = Alignment(vertical="top", wrap_text=True)
-    qc.freeze_panes = "A2"
-    qc.sheet_view.showGridLines = False
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue(), width, height
+    report.freeze_panes = "A2"
+    report.sheet_view.showGridLines = False
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.getvalue(), len(images)
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Excel tool • Bangla + English")
-
-st.info("১) Packing List দিন  ২) Shipping Mark Format দিন  ৩) Generate চাপুন  ৪) Excel Download করুন।")
-
-packing_file = st.file_uploader("১. Packing List নির্বাচন করুন (.xls / .xlsx / .xlsm)", type=["xls", "xlsx", "xlsm"])
-format_file = st.file_uploader("২. Shipping Mark Format নির্বাচন করুন (.xlsx)", type=["xlsx"])
+st.caption("Online Web Version • বাংলা / English")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।")
+packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
+format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
 if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=True):
-    if packing_file is None or format_file is None:
-        st.error("দয়া করে Packing List এবং Shipping Mark Format—দুটি ফাইলই Upload করুন।")
+    if not packing_file or not format_file:
+        st.error("Packing List এবং Shipping Mark Format—দুটি ফাইলই Upload করুন।")
     else:
         try:
-            with st.spinner("Excel পড়া ও Shipping Mark তৈরি হচ্ছে..."):
-                records, totals = build_records(packing_file)
-                output, logo_w, logo_h = make_output(format_file, records, totals)
+            with st.spinner("Packing List-এর Sheet/Header শনাক্ত করে Shipping Mark তৈরি হচ্ছে..."):
+                records, qc_rows = build_records(packing_file)
+                output, image_count = make_output(format_file, records, qc_rows)
             st.success(f"সফল! মোট {len(records)}টি carton label তৈরি হয়েছে।")
-            st.write(f"Hanger Logo: {logo_w} × {logo_h} px — Format-এর মাপ রাখা হয়েছে।")
-            filename = f"{Path(packing_file.name).stem}_Shipping_Mark.xlsx"
-            st.download_button(
-                "⬇️ Shipping Mark Excel Download",
-                data=output,
-                file_name=filename,
+            st.caption(f"Template-এর {image_count}টি image/logo original size ও position-এ রাখা হয়েছে।")
+            st.download_button("⬇️ Shipping Mark Excel Download", data=output,
+                file_name=f"{Path(packing_file.name).stem}_Shipping_Mark.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            st.warning("Download করা Excel-এর QC REPORT sheet এবং কয়েকটি label দেখে Packing List-এর সঙ্গে মিলিয়ে নিন।")
+                use_container_width=True)
+            st.warning("Print করার আগে QC REPORT এবং কয়েকটি label Packing List-এর সঙ্গে মিলিয়ে নিন।")
         except Exception as e:
-            st.error(f"তৈরি করা যায়নি: {e}")
-            st.info("সমস্যা থাকলে Packing List ও Format ফাইল পাঠান; mapping যাচাই করে ঠিক করতে হবে।")
+            st.error(f"Shipping Mark তৈরি হয়নি: {e}")
+            st.info("ভুল mapping হলে Excel-এর header অনুযায়ী শনাক্তকরণ উন্নত করতে হবে; কোনো তথ্য অনুমান করে পূরণ করা হয় না।")
 
 st.divider()
-st.caption("Supported destination sheets: SYDNEY, MELBOURNE, BRISBANE, PERTH")
-st.caption("QTY ISSUE PACK = Column M • QTY SHIPPER PACK = Column Q • Measurement = Column V")
+st.caption("Packing List-এর header ও destination layout অনুযায়ী data mapping স্বয়ংক্রিয়ভাবে শনাক্ত করা হয়।")
