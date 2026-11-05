@@ -124,50 +124,38 @@ def metadata(rows):
     return order, style, dept, description
 
 def detect_columns(rows):
-    # Header rows vary slightly by destination. Read their labels instead of
-    # assuming the same fixed columns for every sheet.
-    header_rows = rows[40:43]
+    # Packing-list headings occupy rows 42-43. Some sheets use two-row
+    # headings (e.g. Unit / Qty and Blister / Qty), so combine them by column.
+    header = rows[41] if len(rows) > 41 else []
+    subheader = rows[42] if len(rows) > 42 else []
     found = {}
-    for offset, row in enumerate(header_rows, start=41):
-        for ci, value in enumerate(row, start=1):
-            if not isinstance(value, str):
-                continue
-            label = re.sub(r"\s+", " ", value.upper()).strip()
-            if "COLOUR" in label and "COLOUR" not in found:
-                found["colour"] = ci
-            elif "KEY CODE" in label or "KEYCODE" in label:
-                found["key"] = ci
-            elif label == "SIZE":
-                found["size"] = ci
-            elif "UNIT" in label and ("QTY" in label or "QUANTITY" in label):
-                found["issue"] = ci
-            elif "BLISTER" in label and "QTY" in label:
-                found["shipper"] = ci
-            elif "CORTON MAS" in label or "CARTON MAS" in label or "MEASUREMENT" in label:
-                found["measurement"] = ci
-    # Sydney's older/compact layout labels the quantity headers differently.
-    # Fallbacks are only used for the known paired sheet layouts.
-    if "issue" not in found or "shipper" not in found or "measurement" not in found:
-        # Locate the header row by the carton number heading.
-        for ri in range(39, min(44, len(rows))):
-            vals = [text(x).upper() for x in rows[ri]]
-            if any("CTN NO" in x for x in vals):
-                # compact Sydney: K=unit qty, O=blister qty, T=measurement
-                # standard layout: M=unit qty, Q=blister qty, V=measurement
-                width = len(rows[ri])
-                if width <= 20:
-                    found.setdefault("issue", 11)
-                    found.setdefault("shipper", 15)
-                    found.setdefault("measurement", 20)
-                else:
-                    found.setdefault("issue", 13)
-                    found.setdefault("shipper", 17)
-                    found.setdefault("measurement", 22)
-                break
+    width = max(len(header), len(subheader))
+    for ci in range(1, width + 1):
+        top = text(header[ci - 1] if ci <= len(header) else "").upper()
+        bottom = text(subheader[ci - 1] if ci <= len(subheader) else "").upper()
+        label = re.sub(r"\\s+", " ", f"{top} {bottom}").strip()
+        if "COLOUR" in label and "colour" not in found:
+            found["colour"] = ci
+        if "KEY CODE" in label or "KEYCODE" in label:
+            found["key"] = ci
+        # Use the top header for SIZE; row 43 also says SIZE below KEY CODE.
+        if top == "SIZE":
+            found["size"] = ci
+        if "UNIT" in label and ("QTY" in label or "QUANTITY" in label):
+            found["issue"] = ci
+        if "BLISTER" in label and ("QTY" in label or "QUANTITY" in label) and "TTL" not in label:
+            found["shipper"] = ci
+        if "CORTON MAS" in label or "CARTON MAS" in label or "MEASUREMENT" in label:
+            found["measurement"] = ci
+
+    # Known layout places garment size immediately to the right of KEY CODE.
+    if "key" in found:
+        found["size"] = found["key"] + 1
     for key, col in {"colour": 7, "key": 9, "size": 10}.items():
         found.setdefault(key, col)
-    if not all(k in found for k in ("issue", "shipper", "measurement", "colour", "key", "size")):
-        raise ValueError("Packing List-এর header থেকে প্রয়োজনীয় Colour/Keycode/Size/Quantity/Measurement column শনাক্ত করা যায়নি।")
+    missing = [k for k in ("issue", "shipper", "measurement", "colour", "key", "size") if k not in found]
+    if missing:
+        raise ValueError("Packing List-এর header থেকে প্রয়োজনীয় column শনাক্ত করা যায়নি: " + ", ".join(missing))
     return found
 
 def build_records(upload):
