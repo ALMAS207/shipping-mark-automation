@@ -1,39 +1,45 @@
-SHIPPING MARK AUTOMATION PRO — CUSTOM BUILD
+SHIPPING MARK AUTOMATION PRO — ONLINE BROWSER VERSION
 
-এই সংস্করণটি আপনার দেওয়া sample:
-- AUS 22163703-34NSUTB3NNFD.XLS
-- formet(8).xlsx
-দিয়ে নির্ধারিত layout ও column mapping অনুযায়ী তৈরি।
+এখন app.py হলো Streamlit Browser App। Chrome থেকে চালাতে Streamlit Community Cloud-এ একবার Deploy করতে হবে।
 
-INSTALLATION (Windows 10/11)
-1. Python 3.10+ ইনস্টল করুন এবং installation-এর সময় "Add Python to PATH" নির্বাচন করুন।
-2. ZIP Extract করুন।
-3. install_requirements.bat চালান।
-4. run_app.bat চালান।
-5. Packing List এবং Shipping Mark Format নির্বাচন করে Generate Shipping Mark চাপুন।
+ONLINE DEPLOY (একবারই করতে হবে)
+1. https://share.streamlit.io/ খুলুন।
+2. Sign in with GitHub চাপুন এবং ALMAS207/shipping-mark-automation repository access দিন।
+3. Create app / Deploy an app নির্বাচন করুন।
+4. Repository: ALMAS207/shipping-mark-automation
+5. Branch: main
+6. Main file path: app.py
+7. Deploy চাপুন এবং build শেষ হওয়া পর্যন্ত অপেক্ষা করুন।
+8. Deploy শেষ হলে Streamlit একটি web link দেবে। সেই link Chrome-এ Bookmark করে রাখুন।
+
+প্রতিদিন ব্যবহার
+1. Streamlit-এর পাওয়া web link খুলুন।
+2. Packing List Upload করুন (.xls / .xlsx / .xlsm)।
+3. Shipping Mark Format Upload করুন (.xlsx)।
+4. Generate Shipping Mark চাপুন।
+5. Shipping Mark Excel Download করুন।
+6. Download করা Excel-এর QC REPORT এবং কয়েকটি label মিলিয়ে নিন।
 
 SUPPORTED INPUT
 - Packing List: .XLS, .XLSX, .XLSM
 - Shipping Mark Template: .XLSX
 - Destination sheets: SYDNEY, MELBOURNE, BRISBANE, PERTH
 
-CUSTOM MAPPING
-- Order / Style / Department / Description: Packing List-এর header section
+CURRENT DATA MAPPING
+- Order / Style / Department / Description: Packing List header section
 - Carton range: Column A to B, rows 44 onward
 - Colour: Column G
 - Keycode: Column I
 - Size: Column J
-- QTY ISSUE PACK: Column M (Unit Qty)
-- QTY SHIPPER PACK: Column Q (Blister Qty)
-- Carton Measurement: Column V
-- Ditto marks in Colour/Keycode/Size: previous valid value carry-forward
-- One label per carton in the carton range
-- Carton number total: all destination sheets combined
-- Hanger logo: template image size and anchor copied to each generated label
-
-OUTPUT
-- One worksheet per carton
-- QC REPORT worksheet
+- QTY ISSUE PACK: Column M
+- QTY SHIPPER PACK: Column Q
+- Carton Measurement: Column V; dimensions and unit only (example: 54X45X30 CM)
+- Colour / Keycode / Size ditto marks: previous valid value carried forward
+- One label per carton
+- Hanger Logo image size and anchor copied from the selected format
+- Output includes QC REPORT sheet
 
 IMPORTANT
-This is a custom build for the sample structure supplied. If future Packing Lists change sheet names, columns, or row positions, the mapping will need updating. Always inspect QC REPORT and visually check sample labels before printing. The software does not run in the background; launch it when you need to process files.
+এই app বর্তমান sample Packing List-এর নির্দিষ্ট sheet name, column এবং row layout অনুসরণ করে। অন্য order-এর Packing List-এ একই structure না থাকলে mapping পরিবর্তন করতে হবে। প্রথমবার deploy করার পর test file দিয়ে output যাচাই করুন। QC REPORT ও label না দেখে সরাসরি print করবেন না।
+
+Windows-এর .bat ফাইলগুলো Desktop version-এর জন্য; Online Browser version চালাতে Streamlit deploy করতে হবে।
