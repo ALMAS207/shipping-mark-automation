@@ -236,34 +236,54 @@ def image_bytes(img):
     return img._data()
 
 def make_output(template_upload, records, qc_rows):
-    data = template_upload.getvalue()
-    wb = load_workbook(BytesIO(data))
-    base = wb["AU SYDNEY"] if "AU SYDNEY" in wb.sheetnames else None
-    if base is None:
-        # accept a format whose first sheet is the intended carton-01 label
-        base = next((s for s in wb.worksheets if s["D15"].value not in (None, "")), None)
-    if base is None:
-        raise ValueError("Shipping Mark Format-এ label sheet (যেমন AU SYDNEY) পাওয়া যায়নি।")
-    images = [(image_bytes(im), im.width, im.height, deepcopy(im.anchor)) for im in base._images]
-    if not images:
-        raise ValueError("Format-এ Hanger Logo/Image পাওয়া যায়নি।")
+    wb = load_workbook(BytesIO(template_upload.getvalue()))
     total = len(records)
-    # Keep the selected format's label design, merged cells, formatting and images.
-    for sh in list(wb.worksheets):
-        if sh is not base:
-            wb.remove(sh)
-    base._images = []
 
-    def put_images(sh):
-        for blob, width, height, anchor in images:
+    # The supplied format already contains destination-specific master labels.
+    # Reuse each destination's own master sheet so AU/SYDNEY etc. stays correct.
+    base_by_dest = {}
+    images_by_dest = {}
+    for dest in DESTINATIONS:
+        base = next((s for s in wb.worksheets
+                     if s.title.upper().startswith("AU " + dest)), None)
+        if base is None:
+            raise ValueError(f"Shipping Mark Format-এ AU {dest} master sheet পাওয়া যায়নি।")
+        if not base._images:
+            raise ValueError(f"AU {dest} Format-এ Hanger Logo/Image পাওয়া যায়নি।")
+        base_by_dest[dest] = base
+        images_by_dest[dest] = [
+            (im._data(), im.width, im.height, deepcopy(im.anchor))
+            for im in base._images
+        ]
+
+    # Keep only the four master sheets while generating new carton labels.
+    masters = set(base_by_dest.values())
+    for sh in list(wb.worksheets):
+        if sh not in masters:
+            wb.remove(sh)
+    for base in masters:
+        base._images = []
+
+    def put_images(sh, dest):
+        for blob, width, height, anchor in images_by_dest[dest]:
             im = XLImage(BytesIO(blob))
             im.width, im.height = width, height
             im.anchor = deepcopy(anchor)
             sh.add_image(im)
 
-    for i, rec in enumerate(records):
-        sh = base if i == 0 else wb.copy_worksheet(base)
-        sh.title = f"{rec['dest'][:3]}-{rec['carton']:03d}"[:31]
+    used_master = set()
+    generated_sheets = []
+    for rec in records:
+        dest = rec["dest"]
+        master = base_by_dest[dest]
+        if dest not in used_master:
+            sh = master
+            used_master.add(dest)
+        else:
+            sh = wb.copy_worksheet(master)
+
+        sh.title = f"{dest[:3]}-{rec['carton']:03d}"[:31]
+        sh["I3"] = "AU/" + dest
         sh["C3"] = rec["dept"]
         sh["C4"] = rec["order"]
         sh["C5"] = rec["key"]
@@ -280,10 +300,13 @@ def make_output(template_upload, records, qc_rows):
         sh.sheet_properties.pageSetUpPr.fitToPage = True
         sh.page_setup.fitToWidth = 1
         sh.page_setup.fitToHeight = 1
-        if i > 0:
-            put_images(sh)
-    # First sheet was cleared to avoid duplicate images, so restore the template images.
-    put_images(base)
+        sh.page_setup.orientation = "landscape"
+        sh.print_area = "$B$1:$G$16"
+        put_images(sh, dest)
+        generated_sheets.append(sh)
+
+    # Put the carton labels in Packing List order, then append the QC sheet.
+    wb._sheets = generated_sheets
 
     report = wb.create_sheet("QC REPORT")
     report.append(["QUALITY CHECK", "RESULT", "DETAIL"])
@@ -294,23 +317,24 @@ def make_output(template_upload, records, qc_rows):
         report.append([f"{item['destination']} carton count", item["status"], detail])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Duplicate carton numbers", "PASS", "No duplicate carton numbers within each destination"])
-    report.append(["Quantity columns", "PASS", "Auto-detected from Unit Qty and Blister Qty headers (Sydney layout differs)"])
-    report.append(["Measurement", "PASS", "Auto-detected Carton Measurement column; dimensions only"])
-    report.append(["Hanger Logo", "PASS", "All template images copied with original size and anchor"])
-    for c in report[1]:
-        c.font = Font(bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", fgColor="1F4E78")
+    report.append(["Quantity columns", "PASS", "Unit Qty and Blister Qty detected separately for each destination"])
+    report.append(["Measurement", "PASS", "CORTON MAS dimensions only; L/W/H labels removed"])
+    report.append(["Hanger Logo", "PASS", "Destination master images copied at original size and anchor"])
+    for cell in report[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
     for col, width in {"A": 34, "B": 16, "C": 90}.items():
         report.column_dimensions[col].width = width
     for row in report.iter_rows():
-        for c in row:
-            c.alignment = Alignment(vertical="top", wrap_text=True)
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
     report.freeze_panes = "A2"
     report.sheet_view.showGridLines = False
-    out = BytesIO()
-    wb.save(out)
-    out.seek(0)
-    return out.getvalue(), len(images)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.2")
