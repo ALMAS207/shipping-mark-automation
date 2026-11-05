@@ -322,12 +322,17 @@ def make_output(template_upload, records, qc_rows):
         sh["C13"] = rec["measurement"]
         sh["D15"] = str(rec["carton"])
         sh["F15"] = str(total)
-        sh.sheet_view.showGridLines = False
-        sh.sheet_properties.pageSetUpPr.fitToPage = True
-        sh.page_setup.fitToWidth = 1
-        sh.page_setup.fitToHeight = 1
-        sh.page_setup.orientation = "landscape"
-        sh.print_area = "$B$1:$G$16"
+        # Preserve the uploaded Shipping Mark Format's original print layout.
+        # Do not force landscape, paper size, margins, scaling, or print area:
+        # the template controls all of these settings for each carton label.
+        sh.sheet_view.showGridLines = master.sheet_view.showGridLines
+        sh.sheet_properties.pageSetUpPr = deepcopy(master.sheet_properties.pageSetUpPr)
+        sh.page_setup = deepcopy(master.page_setup)
+        sh.page_margins = deepcopy(master.page_margins)
+        sh.print_options = deepcopy(master.print_options)
+        sh.print_area = master.print_area
+        sh.row_breaks = deepcopy(master.row_breaks)
+        sh.col_breaks = deepcopy(master.col_breaks)
         put_images(sh, dest)
         generated_sheets.append(sh)
 
@@ -363,7 +368,7 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.6")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.7")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।\nএই Packing List-এর SYDNEY sheet-এ Issue/ Shipper/Measurement কলাম K/O/T; MELBOURNE, BRISBANE ও PERTH sheet-এ M/Q/V। সফটওয়্যার প্রতিটি sheet-এর header দেখে আলাদাভাবে কলাম শনাক্ত করবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
