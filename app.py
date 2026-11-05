@@ -99,30 +99,50 @@ def find_label(rows, pattern, row_start=1, row_end=45):
 def metadata(rows):
     order = style = dept = description = ""
     for ri in range(min(45, len(rows))):
-        for v in rows[ri]:
+        row = rows[ri]
+        for ci, v in enumerate(row):
             if not isinstance(v, str):
                 continue
             s = v.strip()
-            m = re.search(r"ORDER\s*NO\.?\s*[:#-]?\s*(\d+)", s, re.I)
-            if m:
-                order = m.group(1)
-            m = re.search(r"STYLE\s*NO\.?\s*[:#-]?\s*([A-Z0-9-]+)", s, re.I)
-            if m:
-                style = m.group(1)
-            m = re.search(r"DEPT\s*NO\.?\s*[:#-]?\s*(\d+)", s, re.I)
-            if m:
-                dept = m.group(1)
-    # The goods description is normally the first plain text in column A
-    # between the description heading and the order number.
-    for ri in range(33, min(41, len(rows))):
-        v = get_cell(rows, ri + 1, 1)
+            if re.search(r"ORDER\s*NO", s, re.I):
+                m = re.search(r"ORDER\s*NO\.?\s*[:#-]?\s*(\d+)", s, re.I)
+                if m:
+                    order = m.group(1)
+                else:
+                    for adjacent in row[ci + 1:ci + 6]:
+                        candidate = text(adjacent)
+                        if re.fullmatch(r"\d+", candidate):
+                            order = candidate
+                            break
+            if re.search(r"STYLE\s*NO", s, re.I):
+                m = re.search(r"STYLE\s*NO\.?\s*[:#-]?\s*([A-Z0-9-]+)", s, re.I)
+                if m:
+                    style = m.group(1)
+                else:
+                    for adjacent in row[ci + 1:ci + 6]:
+                        candidate = text(adjacent)
+                        if re.fullmatch(r"[A-Z0-9-]+", candidate, re.I):
+                            style = candidate
+                            break
+            if re.search(r"DEPT\s*NO", s, re.I):
+                m = re.search(r"DEPT\s*NO\.?\s*[:#-]?\s*(\d+)", s, re.I)
+                if m:
+                    dept = m.group(1)
+                else:
+                    for adjacent in row[ci + 1:ci + 6]:
+                        candidate = text(adjacent)
+                        if re.fullmatch(r"\d+", candidate):
+                            dept = candidate
+                            break
+    # Description appears below the multi-row description heading in column A.
+    for row_no in range(34, min(42, len(rows)) + 1):
+        v = get_cell(rows, row_no, 1)
         if isinstance(v, str):
             s = v.strip()
             if s and not re.search(r"^(DESCRIPTION|\(ORDER|NUMBER\)|ORDER\s*NO|STYLE\s*NO|DEPT\s*NO|SUMMARY)", s, re.I):
                 description = s
                 break
     return order, style, dept, description
-
 def detect_columns(rows):
     # Packing-list headings occupy rows 42-43. Some sheets use two-row
     # headings (e.g. Unit / Qty and Blister / Qty), so combine them by column.
@@ -151,7 +171,9 @@ def detect_columns(rows):
     # Known layout places garment size immediately to the right of KEY CODE.
     if "key" in found:
         found["size"] = found["key"] + 1
-    for key, col in {"colour": 7, "key": 9, "size": 10}.items():
+    # Verified 2026-11-05 AUS layout fallback; detected headings take priority.
+    for key, col in {"colour": 7, "key": 9, "size": 10,
+                      "issue": 11, "shipper": 15, "measurement": 20}.items():
         found.setdefault(key, col)
     missing = [k for k in ("issue", "shipper", "measurement", "colour", "key", "size") if k not in found]
     if missing:
@@ -341,7 +363,7 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.3")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.4")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
