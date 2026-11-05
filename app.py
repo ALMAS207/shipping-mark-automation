@@ -337,7 +337,7 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.2")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.3")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
