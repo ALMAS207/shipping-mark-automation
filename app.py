@@ -243,11 +243,15 @@ def make_output(template_upload, records, qc_rows):
     # Reuse each destination's own master sheet so AU/SYDNEY etc. stays correct.
     base_by_dest = {}
     images_by_dest = {}
-    for dest in DESTINATIONS:
+    used_destinations = list(dict.fromkeys(rec["dest"] for rec in records))
+    for dest in used_destinations:
         base = next((s for s in wb.worksheets
-                     if s.title.upper().startswith("AU " + dest)), None)
+                     if s.title.strip().upper().startswith("AU " + dest)), None)
         if base is None:
-            raise ValueError(f"Shipping Mark Format-এ AU {dest} master sheet পাওয়া যায়নি।")
+            raise ValueError(
+                f"Shipping Mark Format-এ AU {dest} master sheet পাওয়া যায়নি। "
+                f"যে Destination আছে শুধু সেই Destination-এর master sheet রাখুন।"
+            )
         if not base._images:
             raise ValueError(f"AU {dest} Format-এ Hanger Logo/Image পাওয়া যায়নি।")
         base_by_dest[dest] = base
@@ -362,4 +366,5 @@ if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=
             st.info("ভুল mapping হলে Excel-এর header অনুযায়ী শনাক্তকরণ উন্নত করতে হবে; কোনো তথ্য অনুমান করে পূরণ করা হয় না।")
 
 st.divider()
-st.caption("Packing List-এর header ও destination layout অনুযায়ী data mapping স্বয়ংক্রিয়ভাবে শনাক্ত করা হয়।")
+st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। একই নির্ধারিত Packing List layout অনুসরণ করতে হবে: Destination sheet, carton A:B row 44+, Colour G, Keycode I, Size J, Issue M, Shipper Q, Measurement V।")
+st.caption("একটি Order-এ যে Destination sheet আছে, শুধু সেই Destination-এর master label template প্রয়োজন; অন্য Destination না থাকলেও Generate করা যাবে।")
