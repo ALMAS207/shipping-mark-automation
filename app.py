@@ -363,7 +363,7 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.5")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.6")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।\nএই Packing List-এর SYDNEY sheet-এ Issue/ Shipper/Measurement কলাম K/O/T; MELBOURNE, BRISBANE ও PERTH sheet-এ M/Q/V। সফটওয়্যার প্রতিটি sheet-এর header দেখে আলাদাভাবে কলাম শনাক্ত করবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
@@ -390,3 +390,16 @@ if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=
 st.divider()
 st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Carton range A:B, row 44+; Colour G, Keycode I, Size J। Issue, Shipper ও Measurement প্রতিটি Destination sheet-এর row 42–43 header থেকে আলাদাভাবে শনাক্ত হয়।")
 st.caption("একটি Order-এ যে Destination sheet আছে, শুধু সেই Destination-এর master label template প্রয়োজন; অন্য Destination না থাকলেও Generate করা যাবে।")
+
+with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expanded=True):
+    st.markdown("""
+    - Destination Sheet: SYDNEY, MELBOURNE, BRISBANE, PERTH (যে Sheet থাকবে শুধু সেটিই process হবে)
+    - Carton Range: Column A–B, Row 44 থেকে
+    - Colour: Column G | Keycode: Column I | Size: Column J
+    - SYDNEY: QTY ISSUE PACK = K | QTY SHIPPER PACK = O | Measurement = T
+    - MELBOURNE / BRISBANE / PERTH: QTY ISSUE PACK = M | QTY SHIPPER PACK = Q | Measurement = V
+    - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
+    - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
+    - Measurement শুধু 54X45X30 CM আকারে; L X W X H লেখা হবে না
+    - Shipping Mark Format-এর Hanger Logo-এর size ও position অপরিবর্তিত থাকবে
+    """)
