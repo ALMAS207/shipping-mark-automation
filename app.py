@@ -187,14 +187,19 @@ def build_records(upload):
         first_data = 44
         made_here = 0
         expected_cartons = None
-        # Total carton count is in the summary row labelled TTL CTNS.
+        # Summary header is in row 34; its total is commonly in the same
+        # column on the ORDER NO. row (row 38). Search below the header.
         for ri in range(33, min(40, len(rows))):
             for ci, v in enumerate(rows[ri], start=1):
                 if isinstance(v, str) and "TTL CTNS" in v.upper():
-                    # summary value is usually immediately to the right
-                    candidate = get_cell(rows, ri + 1, ci + 1)
-                    if is_number(candidate):
-                        expected_cartons = int(candidate)
+                    for summary_row in range(ri + 1, min(ri + 7, len(rows))):
+                        candidate = get_cell(rows, summary_row + 1, ci)
+                        if is_number(candidate):
+                            expected_cartons = int(candidate)
+                            break
+                    break
+            if expected_cartons is not None:
+                break
         for r in range(first_data, len(rows) + 1):
             start, end = get_cell(rows, r, 1), get_cell(rows, r, 2)
             if not (is_number(start) and is_number(end)):
@@ -281,7 +286,7 @@ def make_output(template_upload, records, qc_rows):
         sh["C10"] = rec["colour"]
         sh["C11"] = rec["size"]
         sh["C13"] = rec["measurement"]
-        sh["D15"] = f"{rec['carton']:02d}"
+        sh["D15"] = str(rec["carton"])
         sh["F15"] = str(total)
         sh.sheet_view.showGridLines = False
         sh.sheet_properties.pageSetUpPr.fitToPage = True
