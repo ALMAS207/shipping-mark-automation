@@ -43,7 +43,7 @@ def units(v):
 
 def clean_measurement(value):
     s = text(value).upper().replace("×", "X").replace("*", "X")
-    s = re.sub(r"\b(LENGTH|WIDTH|HEIGHT|L|W|H)\b", " ", s)
+    s = re.sub(r"(?i)(?<![A-Z])(?:LENGTH|WIDTH|HEIGHT|L|W|H)\s*", "", s)
     s = re.sub(r"\s+", "", s)
     m = re.search(r"(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)(CM|MM|INCH|IN)?", s)
     if not m:
@@ -133,7 +133,7 @@ def detect_columns(rows):
     for ci in range(1, width + 1):
         top = text(header[ci - 1] if ci <= len(header) else "").upper()
         bottom = text(subheader[ci - 1] if ci <= len(subheader) else "").upper()
-        label = re.sub(r"\\s+", " ", f"{top} {bottom}").strip()
+        label = re.sub(r"\s+", " ", f"{top} {bottom}").strip()
         if "COLOUR" in label and "colour" not in found:
             found["colour"] = ci
         if "KEY CODE" in label or "KEYCODE" in label:
@@ -313,7 +313,7 @@ def make_output(template_upload, records, qc_rows):
     return out.getvalue(), len(images)
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.2")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
