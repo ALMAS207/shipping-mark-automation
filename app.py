@@ -142,7 +142,9 @@ def metadata(rows):
         v = get_cell(rows, row_no, 1)
         if isinstance(v, str):
             s = v.strip()
-            if s and not re.search(r"^(DESCRIPTION|\(ORDER|NUMBER\)|ORDER\s*NO|STYLE\s*NO|DEPT\s*NO|SUMMARY)", s, re.I):
+            if re.search(r"^ORDER\s*NO", s, re.I):
+                break
+            if s and not re.search(r"^(DESCRIPTION|\(ORDER|NUMBER\)|STYLE\s*NO|DEPT\s*NO|SUMMARY)", s, re.I):
                 description = s
     return order, style, dept, description
 def detect_columns(rows):
