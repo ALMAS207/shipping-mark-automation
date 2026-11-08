@@ -175,7 +175,7 @@ def detect_columns(rows):
     for key, col in {"colour": 7, "key": 9, "size": 10,
                       "issue": 11, "shipper": 15, "measurement": 20}.items():
         found.setdefault(key, col)
-    missing = [k for k in ("issue", "shipper", "measurement", "colour", "key", "size") if k not in found]
+    missing = [k for k in ("issue", "shipper", "colour", "key", "size") if k not in found]
     if missing:
         raise ValueError("Packing List-এর header থেকে প্রয়োজনীয় column শনাক্ত করা যায়নি: " + ", ".join(missing))
     return found
@@ -220,10 +220,12 @@ def build_records(upload):
                     last[field] = text(value)
             issue = get_cell(rows, r, cols["issue"])
             shipper = get_cell(rows, r, cols["shipper"])
-            measurement = clean_measurement(get_cell(rows, r, cols["measurement"]))
+            # Measurement is NOT read from the Packing List. It is matched
+            # later from the uploaded Shipping Mark Format by Style + Carton.
+            measurement = ""
             missing = [label for label, value in [
                 ("Colour", last["colour"]), ("Keycode", last["key"]), ("Size", last["size"]),
-                ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper), ("Measurement", measurement)
+                ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper)
             ] if value in (None, "")]
             if missing:
                 raise ValueError(f"{dest} Sheet, Row {r}: তথ্য missing: {', '.join(missing)}")
@@ -261,37 +263,54 @@ def make_output(template_upload, records, qc_rows):
     wb = load_workbook(BytesIO(template_upload.getvalue()))
     total = len(records)
 
-    # The supplied format already contains destination-specific master labels.
-    # Reuse each destination's own master sheet so AU/SYDNEY etc. stays correct.
-    base_by_dest = {}
-    images_by_dest = {}
-    used_destinations = list(dict.fromkeys(rec["dest"] for rec in records))
-    for dest in used_destinations:
+    # The uploaded format workbook is the measurement source. Each carton
+    # sheet stores its own Style (C6), carton number (D15), and dimension (C13).
+    # Match strictly by Style + Carton; never substitute a guessed dimension.
+    def norm_key(v):
+        return re.sub(r"[^A-Z0-9]", "", text(v).upper())
+
+    format_measurements = {}
+    format_sheets_by_style = {}
+    for candidate in wb.worksheets:
+        style_key = norm_key(candidate["C6"].value)
+        carton_text = text(candidate["D15"].value)
+        measurement = clean_measurement(candidate["C13"].value)
+        if style_key:
+            format_sheets_by_style.setdefault(style_key, candidate)
+        if style_key and carton_text.isdigit() and measurement and measurement.upper() != "MISSING":
+            format_measurements[(style_key, int(carton_text))] = measurement
+
+    # Select a layout master for each destination + style. If the format has
+    # no sheet for a destination (for example PERTH), use the same style's
+    # own layout as a fallback, while keeping the correct destination text.
+    base_by_key = {}
+    images_by_key = {}
+    used_keys = list(dict.fromkeys((rec["dest"], norm_key(rec["style"])) for rec in records))
+    for dest, style_key in used_keys:
         base = next((s for s in wb.worksheets
-                     if s.title.strip().upper().startswith("AU " + dest)), None)
+                     if s.title.strip().upper().startswith("AU " + dest)
+                     and norm_key(s["C6"].value) == style_key), None)
         if base is None:
-            raise ValueError(
-                f"Shipping Mark Format-এ AU {dest} master sheet পাওয়া যায়নি। "
-                f"যে Destination আছে শুধু সেই Destination-এর master sheet রাখুন।"
-            )
-        if not base._images:
-            raise ValueError(f"AU {dest} Format-এ Hanger Logo/Image পাওয়া যায়নি।")
-        base_by_dest[dest] = base
-        images_by_dest[dest] = [
+            base = format_sheets_by_style.get(style_key)
+        if base is None:
+            raise ValueError(f"Shipping Mark Format-এ Style {style_key} এর কোনো Format Sheet পাওয়া যায়নি।")
+        key = (dest, style_key)
+        base_by_key[key] = base
+        images_by_key[key] = [
             (im._data(), im.width, im.height, deepcopy(im.anchor))
             for im in base._images
         ]
 
-    # Keep only the four master sheets while generating new carton labels.
-    masters = set(base_by_dest.values())
+    # Keep only the selected layout masters while generating carton labels.
+    masters = set(base_by_key.values())
     for sh in list(wb.worksheets):
         if sh not in masters:
             wb.remove(sh)
     for base in masters:
         base._images = []
 
-    def put_images(sh, dest):
-        for blob, width, height, anchor in images_by_dest[dest]:
+    def put_images(sh, key):
+        for blob, width, height, anchor in images_by_key[key]:
             im = XLImage(BytesIO(blob))
             im.width, im.height = width, height
             im.anchor = deepcopy(anchor)
@@ -301,13 +320,18 @@ def make_output(template_upload, records, qc_rows):
     generated_sheets = []
     for rec in records:
         dest = rec["dest"]
-        master = base_by_dest[dest]
-        if dest not in used_master:
+        style_key = norm_key(rec["style"])
+        key = (dest, style_key)
+        master = base_by_key[key]
+        if key not in used_master:
             sh = master
-            used_master.add(dest)
+            used_master.add(key)
         else:
             sh = wb.copy_worksheet(master)
 
+        # Carton-specific measurement from the exact matching format sheet.
+        # If no Style + Carton match exists, leave the field blank and report it.
+        rec["measurement"] = format_measurements.get((style_key, int(rec["carton"])), "")
         sh.title = f"{dest[:3]}-{rec['carton']:03d}"[:31]
         sh["I3"] = "AU/" + dest
         sh["C3"] = rec["dept"]
@@ -319,7 +343,7 @@ def make_output(template_upload, records, qc_rows):
         sh["C9"] = units(rec["shipper"])
         sh["C10"] = rec["colour"]
         sh["C11"] = rec["size"]
-        sh["C13"] = rec["measurement"]
+        sh["C13"] = rec["measurement"] or ""
         sh["D15"] = str(rec["carton"])
         sh["F15"] = str(total)
         # Preserve the uploaded Shipping Mark Format's original print layout.
@@ -333,7 +357,7 @@ def make_output(template_upload, records, qc_rows):
         sh.print_area = master.print_area
         sh.row_breaks = deepcopy(master.row_breaks)
         sh.col_breaks = deepcopy(master.col_breaks)
-        put_images(sh, dest)
+        put_images(sh, key)
         generated_sheets.append(sh)
 
     # Put the carton labels in Packing List order, then append the QC sheet.
@@ -349,8 +373,11 @@ def make_output(template_upload, records, qc_rows):
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Duplicate carton numbers", "PASS", "No duplicate carton numbers within each destination"])
     report.append(["Quantity columns", "PASS", "Unit Qty and Blister Qty detected separately for each destination"])
-    report.append(["Measurement", "PASS", "CORTON MAS dimensions only; L/W/H labels removed"])
-    report.append(["Hanger Logo", "PASS", "Destination master images copied at original size and anchor"])
+    missing_measurements = [f"{r['dest']} carton {r['carton']}" for r in records if not r.get("measurement")]
+    report.append(["Measurement source", "PASS", "Read from Shipping Mark Format by exact Style + Carton; Packing List measurement ignored"])
+    report.append(["Missing measurements", "MISSING" if missing_measurements else "PASS",
+                   ", ".join(missing_measurements) if missing_measurements else "All cartons matched to a format measurement"])
+    report.append(["Hanger Logo", "PASS", "Selected style/destination master images copied at original size and anchor"])
     for cell in report[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
@@ -368,8 +395,8 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.7")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।\nএই Packing List-এর SYDNEY sheet-এ Issue/ Shipper/Measurement কলাম K/O/T; MELBOURNE, BRISBANE ও PERTH sheet-এ M/Q/V। সফটওয়্যার প্রতিটি sheet-এর header দেখে আলাদাভাবে কলাম শনাক্ত করবে।")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.08.1")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Measurement Packing List থেকে নয়—Shipping Mark Format-এর একই Style ও Carton নম্বরের Sheet-এর C13 ঘর থেকে নেওয়া হবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -401,10 +428,11 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - Destination Sheet: SYDNEY, MELBOURNE, BRISBANE, PERTH (যে Sheet থাকবে শুধু সেটিই process হবে)
     - Carton Range: Column A–B, Row 44 থেকে
     - Colour: Column G | Keycode: Column I | Size: Column J
-    - SYDNEY: QTY ISSUE PACK = K | QTY SHIPPER PACK = O | Measurement = T
-    - MELBOURNE / BRISBANE / PERTH: QTY ISSUE PACK = M | QTY SHIPPER PACK = Q | Measurement = V
+    - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
+    - Measurement Packing List থেকে নেওয়া হবে না; Format Sheet-এর C6 (Style), D15 (Carton No.) এবং C13 (Dimension) দিয়ে exact match হবে
+    - Style + Carton match না হলে Measurement ফাঁকা থাকবে এবং QC REPORT-এ MISSING দেখাবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
-    - Measurement শুধু 54X45X30 CM আকারে; L X W X H লেখা হবে না
+    - Measurement Format-এ যেভাবে দেওয়া আছে সেভাবেই রাখা হবে; L/W/H label থাকলে শুধু dimension value পরিষ্কার করে দেখানো হবে
     - Shipping Mark Format-এর Hanger Logo-এর size ও position অপরিবর্তিত থাকবে
     """)
