@@ -269,16 +269,34 @@ def make_output(template_upload, records, qc_rows):
     def norm_key(v):
         return re.sub(r"[^A-Z0-9]", "", text(v).upper())
 
+    def pack_key(v):
+        s = text(v).upper().replace("UNITS", "").strip()
+        try:
+            return str(int(float(s)))
+        except Exception:
+            digits = re.search(r"\d+(?:\.\d+)?", s)
+            return str(int(float(digits.group(0)))) if digits else norm_key(s)
+
+    # The format's BLISTER/QTY values determine the carton dimension.
+    # Match by Style + QTY ISSUE PACK + QTY SHIPPER PACK, NOT carton number.
     format_measurements = {}
+    ambiguous_measurements = set()
     format_sheets_by_style = {}
     for candidate in wb.worksheets:
         style_key = norm_key(candidate["C6"].value)
-        carton_text = text(candidate["D15"].value)
+        issue_key = pack_key(candidate["C8"].value)
+        shipper_key = pack_key(candidate["C9"].value)
         measurement = clean_measurement(candidate["C13"].value)
         if style_key:
             format_sheets_by_style.setdefault(style_key, candidate)
-        if style_key and carton_text.isdigit() and measurement and measurement.upper() != "MISSING":
-            format_measurements[(style_key, int(carton_text))] = measurement
+        if style_key and issue_key and shipper_key and measurement and measurement.upper() != "MISSING":
+            measure_key = (style_key, issue_key, shipper_key)
+            if measure_key in format_measurements and format_measurements[measure_key] != measurement:
+                ambiguous_measurements.add(measure_key)
+            else:
+                format_measurements[measure_key] = measurement
+    for key in ambiguous_measurements:
+        format_measurements.pop(key, None)
 
     # Select a layout master for each destination + style. If the format has
     # no sheet for a destination (for example PERTH), use the same style's
@@ -331,7 +349,8 @@ def make_output(template_upload, records, qc_rows):
 
         # Carton-specific measurement from the exact matching format sheet.
         # If no Style + Carton match exists, leave the field blank and report it.
-        rec["measurement"] = format_measurements.get((style_key, int(rec["carton"])), "")
+        measure_key = (style_key, pack_key(rec["issue"]), pack_key(rec["shipper"]))
+        rec["measurement"] = "" if measure_key in ambiguous_measurements else format_measurements.get(measure_key, "")
         sh.title = f"{dest[:3]}-{rec['carton']:03d}"[:31]
         sh["I3"] = "AU/" + dest
         sh["C3"] = rec["dept"]
@@ -373,10 +392,13 @@ def make_output(template_upload, records, qc_rows):
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Duplicate carton numbers", "PASS", "No duplicate carton numbers within each destination"])
     report.append(["Quantity columns", "PASS", "Unit Qty and Blister Qty detected separately for each destination"])
-    missing_measurements = [f"{r['dest']} carton {r['carton']}" for r in records if not r.get("measurement")]
-    report.append(["Measurement source", "PASS", "Read from Shipping Mark Format by exact Style + Carton; Packing List measurement ignored"])
+    missing_measurements = [f"{r['dest']} carton {r['carton']} (Style {r['style']}, Issue {units(r['issue'])}, Shipper/Blister {units(r['shipper'])})"
+                            for r in records if not r.get("measurement")]
+    report.append(["Measurement source", "PASS", "Read from Format by Style + QTY ISSUE PACK + QTY SHIPPER PACK (Blister); carton number is not used to choose dimension"])
     report.append(["Missing measurements", "MISSING" if missing_measurements else "PASS",
                    ", ".join(missing_measurements) if missing_measurements else "All cartons matched to a format measurement"])
+    report.append(["Ambiguous blister mappings", "MISSING" if ambiguous_measurements else "PASS",
+                   ", ".join(map(str, sorted(ambiguous_measurements))) if ambiguous_measurements else "No conflicting dimensions for the same Style + Issue + Shipper/Blister combination"])
     report.append(["Hanger Logo", "PASS", "Selected style/destination master images copied at original size and anchor"])
     for cell in report[1]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -395,7 +417,7 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), sum(len(v) for v in images_by_dest.values())
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.08.1")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.08.2")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Measurement Packing List থেকে নয়—Shipping Mark Format-এর একই Style ও Carton নম্বরের Sheet-এর C13 ঘর থেকে নেওয়া হবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
@@ -429,8 +451,9 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - Carton Range: Column A–B, Row 44 থেকে
     - Colour: Column G | Keycode: Column I | Size: Column J
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
-    - Measurement Packing List থেকে নেওয়া হবে না; Format Sheet-এর C6 (Style), D15 (Carton No.) এবং C13 (Dimension) দিয়ে exact match হবে
-    - Style + Carton match না হলে Measurement ফাঁকা থাকবে এবং QC REPORT-এ MISSING দেখাবে
+    - Measurement Format-এর Blister/QTY অনুযায়ী মিলবে: C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
+    - Packing List-এর Style + Issue Qty + Shipper/Blister Qty-এর সঙ্গে Format-এর একই সমন্বয় মিলিয়ে Measurement বসবে; Carton No. দিয়ে মাপ নির্বাচন হবে না
+    - একই Blister সমন্বয়ে Format-এ একাধিক ভিন্ন মাপ থাকলে বা মিল না পেলে QC REPORT-এ MISSING দেখাবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
     - Measurement Format-এ যেভাবে দেওয়া আছে সেভাবেই রাখা হবে; L/W/H label থাকলে শুধু dimension value পরিষ্কার করে দেখানো হবে
