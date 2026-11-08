@@ -293,6 +293,8 @@ def make_output(template_upload, records, qc_rows):
     # not sheets named "AU SYDNEY MASTER". Use B2 for destination and C6 for style.
     format_measurements = {}
     ambiguous_measurements = set()
+    global_measurements = {}
+    ambiguous_global_measurements = set()
     format_bases = {}
     images_by_key = {}
 
@@ -314,10 +316,17 @@ def make_output(template_upload, records, qc_rows):
                 ambiguous_measurements.add(measure_key)
             else:
                 format_measurements[measure_key] = measurement
+            global_key = (style_key, issue_key, blister_key)
+            if global_key in global_measurements and global_measurements[global_key] != measurement:
+                ambiguous_global_measurements.add(global_key)
+            else:
+                global_measurements[global_key] = measurement
     data_wb.close()
 
     for key in ambiguous_measurements:
         format_measurements.pop(key, None)
+    for key in ambiguous_global_measurements:
+        global_measurements.pop(key, None)
 
     used_keys = list(dict.fromkeys((rec["dest"], norm_key(rec["style"])) for rec in records))
     base_by_key = {}
@@ -362,9 +371,18 @@ def make_output(template_upload, records, qc_rows):
             )
         measurement = format_measurements.get(measure_key, "")
         if not measurement:
+            global_key = (style_key, pack_key(rec["issue"]), pack_key(rec["shipper"]))
+            if global_key in ambiguous_global_measurements:
+                raise ValueError(
+                    f"{dest} carton {rec['carton']}: এই Issue/Blister Qty-এর জন্য Format-এ "
+                    "একাধিক আলাদা Measurement আছে এবং Destination অনুযায়ী নির্দিষ্ট মাপ নেই।"
+                )
+            measurement = global_measurements.get(global_key, "")
+        if not measurement:
             raise ValueError(
-                f"{dest} carton {rec['carton']}: Style + Issue Qty + Blister Qty অনুযায়ী "
-                "Shipping Mark Format-এ Measurement পাওয়া যায়নি।"
+                f"{dest} carton {rec['carton']}: Issue Qty {units(rec['issue'])} ও "
+                f"Blister Qty {units(rec['shipper'])}-এর জন্য Shipping Mark Format-এ Measurement নেই। "
+                "সঠিক Format Measurement যোগ করে আবার Generate করুন।"
             )
 
         sh = wb.copy_worksheet(master)
