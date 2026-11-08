@@ -264,7 +264,11 @@ def image_bytes(img):
     return img._data()
 
 def make_output(template_upload, records, qc_rows):
-    wb = load_workbook(BytesIO(template_upload.getvalue()))
+    template_bytes = template_upload.getvalue()
+    wb = load_workbook(BytesIO(template_bytes))
+    # Read cached formula results separately; the visible destination cell B2
+    # in this format is a formula linked to I11.
+    data_wb = load_workbook(BytesIO(template_bytes), data_only=True, read_only=True)
     total = len(records)
 
     def norm_key(v):
@@ -293,22 +297,24 @@ def make_output(template_upload, records, qc_rows):
     images_by_key = {}
 
     for candidate in wb.worksheets:
-        dest = destination_key(candidate["B2"].value)
-        style_key = norm_key(candidate["C6"].value)
+        data_sheet = data_wb[candidate.title]
+        dest = destination_key(data_sheet["B2"].value)
+        style_key = norm_key(data_sheet["C6"].value)
         if not dest or not style_key:
             continue
         key = (dest, style_key)
         format_bases.setdefault(key, candidate)
 
-        issue_key = pack_key(candidate["C8"].value)
-        blister_key = pack_key(candidate["C9"].value)
-        measurement = clean_measurement(candidate["C13"].value)
+        issue_key = pack_key(data_sheet["C8"].value)
+        blister_key = pack_key(data_sheet["C9"].value)
+        measurement = clean_measurement(data_sheet["C13"].value)
         if issue_key and blister_key and measurement:
             measure_key = (dest, style_key, issue_key, blister_key)
             if measure_key in format_measurements and format_measurements[measure_key] != measurement:
                 ambiguous_measurements.add(measure_key)
             else:
                 format_measurements[measure_key] = measurement
+    data_wb.close()
 
     for key in ambiguous_measurements:
         format_measurements.pop(key, None)
