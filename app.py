@@ -297,11 +297,16 @@ def make_output(template_upload, records, qc_rows):
     ambiguous_global_measurements = set()
     format_bases = {}
     images_by_key = {}
+    master_sheets = []
 
     for candidate in wb.worksheets:
         data_sheet = data_wb[candidate.title]
-        dest = destination_key(data_sheet["B2"].value)
+        # Master sheet names are explicit in the template; B2 may be a formula,
+        # so use the sheet title as a fallback destination identifier.
+        dest = destination_key(data_sheet["B2"].value) or destination_key(candidate.title)
         style_key = norm_key(data_sheet["C6"].value)
+        if "MASTER" in norm_key(candidate.title) and dest:
+            master_sheets.append(candidate)
         if not dest or not style_key:
             continue
         key = (dest, style_key)
@@ -342,11 +347,12 @@ def make_output(template_upload, records, qc_rows):
         ]
 
     masters = set(base_by_key.values())
+    # Keep every destination master sheet in the final workbook, as requested.
+    # Do not clear images from originals: their hanger/logo artwork must remain.
+    keep_originals = set(master_sheets)
     for sh in list(wb.worksheets):
-        if sh not in masters:
+        if sh not in masters and sh not in keep_originals:
             wb.remove(sh)
-    for base in masters:
-        base._images = []
 
     def put_images(sh, key):
         for blob, width, height, anchor in images_by_key[key]:
@@ -378,6 +384,12 @@ def make_output(template_upload, records, qc_rows):
                     "একাধিক আলাদা Measurement আছে এবং Destination অনুযায়ী নির্দিষ্ট মাপ নেই।"
                 )
             measurement = global_measurements.get(global_key, "")
+        # User-confirmed fallback dimension for Blister Qty 01.
+        # A specific matching format measurement always takes priority.
+        used_confirmed_default = False
+        if not measurement and pack_key(rec["shipper"]) == "1":
+            measurement = "48X34X10 CM"
+            used_confirmed_default = True
         if not measurement:
             raise ValueError(
                 f"{dest} carton {rec['carton']}: Issue Qty {units(rec['issue'])} ও "
@@ -413,7 +425,8 @@ def make_output(template_upload, records, qc_rows):
         put_images(sh, key)
         generated_sheets.append(sh)
 
-    wb._sheets = generated_sheets
+    # Preserve AU <DESTINATION> master sheet(s) at the beginning, followed by labels.
+    wb._sheets = list(master_sheets) + generated_sheets
 
     report = wb.create_sheet("QC REPORT")
     report.append(["QUALITY CHECK", "RESULT", "DETAIL"])
@@ -424,7 +437,8 @@ def make_output(template_upload, records, qc_rows):
         report.append([f"{item['destination']} carton count", item["status"], detail])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
-    report.append(["Measurement source", "PASS", "Measurement selected by Destination + Style + Issue Qty + Blister Qty"])
+    report.append(["Measurement source", "PASS", "Measurement selected by Destination + Style + Issue Qty + Blister Qty; user-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists"])
+    report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
     for cell in report[1]:
@@ -446,8 +460,8 @@ def make_output(template_upload, records, qc_rows):
 
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.08.3")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে।")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.08.4")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -472,7 +486,7 @@ if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=
 
 st.divider()
 st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের অতিরিক্ত space উপেক্ষা হবে; Format-এর numbered sheet থেকে Destination + Style অনুযায়ী layout এবং Blister Qty অনুযায়ী Measurement নেওয়া হবে।")
-st.caption("একটি Order-এ যে Destination sheet আছে, শুধু সেই Destination-এর master label template প্রয়োজন; অন্য Destination না থাকলেও Generate করা যাবে।")
+st.caption("AU SYDNEY master sheet-সহ Format-এর সব প্রাসঙ্গিক Destination Master Sheet output-এ রাখা হবে; Carton label-গুলো Master Layout থেকে তৈরি হবে।")
 
 with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expanded=True):
     st.markdown("""
