@@ -245,6 +245,15 @@ def build_records(upload):
                     "source_row": r
                 })
                 made_here += 1
+        # Never assume a fixed carton count. Generate from every detected carton range,
+        # then compare with the destination summary when the Packing List provides one.
+        if expected_cartons is not None and expected_cartons != made_here:
+            raise ValueError(
+                f"{dest} Sheet: Packing List summary-তে {expected_cartons} Carton, "
+                f"kintu carton range theke {made_here}টি পাওয়া গেছে। "
+                "কোনো label বাদ/বেশি হওয়ার ঝুঁকি থাকায় Generate বন্ধ করা হয়েছে। "
+                "Carton range এবং TTL CTNS মিলিয়ে নিন।"
+            )
         qc.append({"destination": dest, "generated": made_here, "expected": expected_cartons,
                    "status": "PASS" if expected_cartons in (None, made_here) else "REVIEW"})
     if not records:
@@ -460,8 +469,8 @@ def make_output(template_upload, records, qc_rows):
 
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.08.4")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
