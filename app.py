@@ -363,6 +363,7 @@ def make_output(template_upload, records, qc_rows):
     # Blister Qty differs from the Format sheet's Blister Qty.
     format_carton_measurements = {}
     ambiguous_format_carton_measurements = set()
+    format_carton_dimension_sets = {}
     format_qty_measurements = {}
     format_bases = {}
     images_by_key = {}
@@ -386,15 +387,21 @@ def make_output(template_upload, records, qc_rows):
         blister_key = pack_key(data_sheet["C9"].value)
         measurement = clean_measurement(data_sheet["C13"].value)
         carton_key = pack_key(data_sheet["D15"].value)
+        # Some format workbooks leave D15 blank/formula-only; recover the
+        # carton number from a numbered sheet title such as MELBOURNE_001.
+        if not carton_key:
+            title_match = re.search(r"(\\d+)\\s*$", candidate.title)
+            if title_match:
+                carton_key = pack_key(title_match.group(1))
         if carton_key and measurement:
+            carton_only_lookup = (dest, style_key, carton_key)
+            format_carton_dimension_sets.setdefault(carton_only_lookup, set()).add(measurement)
             carton_lookup = (dest, style_key, carton_key, blister_key)
             if (carton_lookup in format_carton_measurements
                     and format_carton_measurements[carton_lookup] != measurement):
                 ambiguous_format_carton_measurements.add(carton_lookup)
             else:
                 format_carton_measurements[carton_lookup] = measurement
-            # Secondary fallback is allowed only when a destination/style/
-            # blister-qty combination points to one unique dimension.
             if blister_key:
                 qty_lookup = (dest, style_key, blister_key)
                 format_qty_measurements.setdefault(qty_lookup, set()).add(measurement)
@@ -451,7 +458,18 @@ def make_output(template_upload, records, qc_rows):
             )
         measurement = format_carton_measurements.get(carton_lookup, "")
 
-        # SECONDARY: if an exact carton + blister sheet is absent, use a
+        # If the same carton appears more than once in the Format with the
+        # same dimension, treat it as one measurement (duplicates are harmless).
+        # If carton+blister exact match is absent, use the carton-only mapping
+        # when it resolves to exactly one distinct dimension.
+        if not measurement:
+            carton_candidates = format_carton_dimension_sets.get(
+                (dest, style_key, carton_key), set()
+            )
+            if len(carton_candidates) == 1:
+                measurement = next(iter(carton_candidates))
+
+        # SECONDARY: if carton mapping is absent/ambiguous, use the
         # destination/style/blister mapping only when it has one unique size.
         if not measurement and blister_key:
             candidates = format_qty_measurements.get((dest, style_key, blister_key), set())
@@ -466,8 +484,9 @@ def make_output(template_upload, records, qc_rows):
 
         if not measurement:
             raise ValueError(
-                f"{dest} carton {rec['carton']}: Shipping Mark Format-এ এই Destination/Style/Carton-এর "
-                "Measurement Sheet পাওয়া যায়নি। Format-এর Carton Sheet যোগ করুন।"
+                f"{dest} carton {rec['carton']}: এই Destination/Style/Carton-এর জন্য Format-এ "
+                "একাধিক আলাদা Measurement আছে অথবা Carton নম্বর মেলেনি। "
+                "Format-এর numbered sheet-এর D15 Carton No. এবং C13 Measurement যাচাই করুন।"
             )
 
         sh = wb.copy_worksheet(master)
