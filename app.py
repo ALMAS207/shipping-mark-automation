@@ -475,6 +475,10 @@ def make_output(template_upload, records, qc_rows):
             elif len(candidates) > 1:
                 measurement = ""
 
+        # Save the resolved value back to the record so the QC matched-count
+        # reflects actual measurements. A missing/ambiguous match is allowed:
+        # leave the output cell blank and continue generating the label.
+        rec["measurement"] = measurement or ""
         # Measurement is optional for label generation. If no reliable match
         # exists, leave the measurement cell blank and record it in QC REPORT.
         # Never guess a dimension from another carton/style/destination.
@@ -557,7 +561,7 @@ def make_output(template_upload, records, qc_rows):
 
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.2")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর সঙ্গে না মিললেও Shipping Mark তৈরি হবে; সেক্ষেত্রে Measurement cell ফাঁকা থাকবে এবং QC REPORT-এ missing Measurement দেখাবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
