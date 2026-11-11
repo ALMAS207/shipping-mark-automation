@@ -468,57 +468,25 @@ def make_output(template_upload, records, qc_rows):
         destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
         cross_destination_key = (style_key, issue_key, blister_key, carton_key)
 
-        # 1) Exact destination + style + issue qty + blister qty + carton number.
-        if destination_carton_key in ambiguous_destination_carton_measurements:
-            raise ValueError(
-                f"{dest} carton {rec['carton']}: একই Destination/Carton/Quantity-এর জন্য "
-                "Format-এ একাধিক আলাদা Measurement আছে। Format sheet যাচাই করুন।"
-            )
-        measurement = destination_carton_measurements.get(destination_carton_key, "")
+        # Measurement is optional: resolve only when a mapping is unambiguous.
+        # Never raise an error or insert a default dimension when it is missing.
+        measurement = ""
+        if destination_carton_key not in ambiguous_destination_carton_measurements:
+            measurement = destination_carton_measurements.get(destination_carton_key, "")
 
-        # 2) If this destination has no carton sheet, reuse the same carton and
-        # exact style/quantity combination from another destination (Sydney,
-        # Brisbane, Perth, etc.). This avoids guessing from a different carton.
-        if not measurement:
-            if cross_destination_key in ambiguous_cross_destination_carton_measurements:
-                raise ValueError(
-                    f"{dest} carton {rec['carton']}: অন্য Destination-এর Format sheet-এও "
-                    "এই Carton/Style/Issue/Blister combination-এর একাধিক Measurement আছে। "
-                    "সঠিক Format sheet নির্ধারণ করুন।"
-                )
+        if not measurement and cross_destination_key not in ambiguous_cross_destination_carton_measurements:
             measurement = cross_destination_carton_measurements.get(cross_destination_key, "")
 
-        # 3) Backward-compatible fallback to destination-wide exact qty mapping,
-        # then cross-destination exact qty mapping only when each is unambiguous.
-        if not measurement:
-            if measure_key in ambiguous_measurements:
-                raise ValueError(
-                    f"{dest} / Style {rec['style']} / Issue {units(rec['issue'])} / "
-                    f"Blister {units(rec['shipper'])}: একাধিক Measurement আছে এবং "
-                    "এই Carton Number-এর নির্দিষ্ট মাপ পাওয়া যায়নি।"
-                )
+        if not measurement and measure_key not in ambiguous_measurements:
             measurement = format_measurements.get(measure_key, "")
+
         if not measurement:
             global_key = (style_key, issue_key, blister_key)
-            if global_key in ambiguous_global_measurements:
-                raise ValueError(
-                    f"{dest} carton {rec['carton']}: এই Issue/Blister Qty-এর জন্য "
-                    "অন্য Format sheet-এ একাধিক Measurement আছে এবং Carton Number অনুযায়ী "
-                    "একটি নির্দিষ্ট মাপ পাওয়া যায়নি।"
-                )
-            measurement = global_measurements.get(global_key, "")
-        # User-confirmed fallback dimension for Blister Qty 01.
-        # A specific matching format measurement always takes priority.
-        used_confirmed_default = False
-        if not measurement and pack_key(rec["shipper"]) == "1":
-            measurement = "48X34X10 CM"
-            used_confirmed_default = True
-        if not measurement:
-            raise ValueError(
-                f"{dest} carton {rec['carton']}: Issue Qty {units(rec['issue'])} ও "
-                f"Blister Qty {units(rec['shipper'])}-এর জন্য Shipping Mark Format-এ Measurement নেই। "
-                "সঠিক Format Measurement যোগ করে আবার Generate করুন।"
-            )
+            if global_key not in ambiguous_global_measurements:
+                measurement = global_measurements.get(global_key, "")
+
+        # No matching/unique measurement? Keep C13 blank and continue creating labels.
+        measurement = measurement or ""
 
         sh = wb.copy_worksheet(master)
         sh.title = f"{dest[:3]}-{int(rec['carton']):03d}"[:31]
@@ -585,7 +553,7 @@ def make_output(template_upload, records, qc_rows):
 
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.2")
 st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
@@ -620,8 +588,8 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - Colour: Column G | Keycode: Column I | Size: Column J
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
     - Measurement Format: D15 (Carton No.), C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
-    - Measurement selection: প্রথমে একই Destination + Carton No. + Style + Issue Qty + Blister Qty; সেখানে না পেলে Sydney / Brisbane / Perth / অন্য Destination sheet-এ একই Carton No. + Style + Qty মিলিয়ে Measurement বসবে
-    - একই Blister সমন্বয়ে Format-এ একাধিক ভিন্ন মাপ থাকলে বা মিল না পেলে QC REPORT-এ MISSING দেখাবে
+    - Measurement selection: প্রথমে একই Destination + Carton No. + Style + Issue Qty + Blister Qty; সেখানে না পেলে অন্য Destination sheet-এ একই Carton No. + Style + Qty-এর unambiguous match নেবে; না মিললে Measurement blank থাকবে এবং Shipping Mark তৈরি চলবে
+    - একাধিক ভিন্ন Measurement থাকলে বা কোনো match না পেলে Measurement blank থাকবে; Shipping Mark generation বন্ধ হবে না
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
     - Carton Number 001 / 1 / 1.0, leading/trailing spaces স্বয়ংক্রিয়ভাবে normalize হবে; auto-fix QC REPORT-এ log হবে
