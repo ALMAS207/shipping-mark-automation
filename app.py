@@ -390,7 +390,7 @@ def make_output(template_upload, records, qc_rows):
         # Some format workbooks leave D15 blank/formula-only; recover the
         # carton number from a numbered sheet title such as MELBOURNE_001.
         if not carton_key:
-            title_match = re.search(r"(\\d+)\\s*$", candidate.title)
+            title_match = re.search(r"(\d+)\s*$", candidate.title)
             if title_match:
                 carton_key = pack_key(title_match.group(1))
         if carton_key and measurement:
