@@ -32,8 +32,8 @@ def parse_carton_number(value):
     if isinstance(value, (int, float)):
         number = float(value)
         return int(number) if number.is_integer() and number >= 0 else None
-    s = re.sub(r"\\s+", "", str(value)).replace(",", "")
-    if not re.fullmatch(r"\\d+(?:\\.0+)?", s):
+    s = re.sub(r"\s+", "", str(value)).replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.0+)?", s):
         return None
     try:
         number = float(s)
