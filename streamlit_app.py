@@ -266,10 +266,10 @@ def build_records(upload):
             # Auto-normalize harmless Excel formatting issues and record them for QC.
             for raw_value, label in ((start, "Carton Start"), (end, "Carton End")):
                 if isinstance(raw_value, str):
-                    compact = re.sub(r"\\s+", "", raw_value)
+                    compact = re.sub(r"\s+", "", raw_value)
                     if compact != raw_value:
                         normalization_notes.append(f"Row {r}: {label}-এর অতিরিক্ত Space বাদ দেওয়া হয়েছে")
-                    if re.fullmatch(r"0+\\d+", compact) and int(compact) > 0:
+                    if re.fullmatch(r"0+\d+", compact) and int(compact) > 0:
                         normalization_notes.append(f"Row {r}: {label} '{raw_value}' থেকে leading zero বাদ দিয়ে {int(compact)} নেওয়া হয়েছে")
             for field in ("colour", "key", "size"):
                 value = get_cell(rows, r, cols[field])
