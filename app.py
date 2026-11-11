@@ -390,7 +390,7 @@ def make_output(template_upload, records, qc_rows):
         carton_key = pack_key(data_sheet["D15"].value)
         # Recover carton number from a numbered sheet title if D15 is blank.
         if not carton_key:
-            title_match = re.search(r"(\\d+)\\s*$", candidate.title)
+            title_match = re.search(r"(\d+)\s*$", candidate.title)
             if title_match:
                 carton_key = pack_key(title_match.group(1))
         if carton_key and issue_key and blister_key and measurement:
