@@ -361,6 +361,13 @@ def make_output(template_upload, records, qc_rows):
     ambiguous_measurements = set()
     global_measurements = {}
     ambiguous_global_measurements = set()
+    # Per-carton lookup: the format workbook contains one sheet per carton.
+    # Prefer the same destination, then reuse an exact matching carton/qty
+    # measurement found on another destination sheet.
+    destination_carton_measurements = {}
+    ambiguous_destination_carton_measurements = set()
+    cross_destination_carton_measurements = {}
+    ambiguous_cross_destination_carton_measurements = set()
     format_bases = {}
     images_by_key = {}
     master_sheets = []
@@ -392,12 +399,32 @@ def make_output(template_upload, records, qc_rows):
                 ambiguous_global_measurements.add(global_key)
             else:
                 global_measurements[global_key] = measurement
+
+            carton_key = pack_key(data_sheet["D15"].value)
+            if carton_key:
+                destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
+                if (destination_carton_key in destination_carton_measurements
+                        and destination_carton_measurements[destination_carton_key] != measurement):
+                    ambiguous_destination_carton_measurements.add(destination_carton_key)
+                else:
+                    destination_carton_measurements[destination_carton_key] = measurement
+
+                cross_destination_key = (style_key, issue_key, blister_key, carton_key)
+                if (cross_destination_key in cross_destination_carton_measurements
+                        and cross_destination_carton_measurements[cross_destination_key] != measurement):
+                    ambiguous_cross_destination_carton_measurements.add(cross_destination_key)
+                else:
+                    cross_destination_carton_measurements[cross_destination_key] = measurement
     data_wb.close()
 
     for key in ambiguous_measurements:
         format_measurements.pop(key, None)
     for key in ambiguous_global_measurements:
         global_measurements.pop(key, None)
+    for key in ambiguous_destination_carton_measurements:
+        destination_carton_measurements.pop(key, None)
+    for key in ambiguous_cross_destination_carton_measurements:
+        cross_destination_carton_measurements.pop(key, None)
 
     used_keys = list(dict.fromkeys((rec["dest"], norm_key(rec["style"])) for rec in records))
     base_by_key = {}
@@ -434,20 +461,50 @@ def make_output(template_upload, records, qc_rows):
         key = (dest, style_key)
         master = base_by_key[key]
 
-        measure_key = (dest, style_key, pack_key(rec["issue"]), pack_key(rec["shipper"]))
-        if measure_key in ambiguous_measurements:
+        issue_key = pack_key(rec["issue"])
+        blister_key = pack_key(rec["shipper"])
+        carton_key = pack_key(rec["carton"])
+        measure_key = (dest, style_key, issue_key, blister_key)
+        destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
+        cross_destination_key = (style_key, issue_key, blister_key, carton_key)
+
+        # 1) Exact destination + style + issue qty + blister qty + carton number.
+        if destination_carton_key in ambiguous_destination_carton_measurements:
             raise ValueError(
-                f"{dest} / Style {rec['style']} / Issue {units(rec['issue'])} / "
-                f"Blister {units(rec['shipper'])}: Format-এ একাধিক আলাদা Measurement আছে। "
-                "সঠিক মাপ নির্ধারণ না হওয়ায় Generate বন্ধ করা হয়েছে।"
+                f"{dest} carton {rec['carton']}: একই Destination/Carton/Quantity-এর জন্য "
+                "Format-এ একাধিক আলাদা Measurement আছে। Format sheet যাচাই করুন।"
             )
-        measurement = format_measurements.get(measure_key, "")
+        measurement = destination_carton_measurements.get(destination_carton_key, "")
+
+        # 2) If this destination has no carton sheet, reuse the same carton and
+        # exact style/quantity combination from another destination (Sydney,
+        # Brisbane, Perth, etc.). This avoids guessing from a different carton.
         if not measurement:
-            global_key = (style_key, pack_key(rec["issue"]), pack_key(rec["shipper"]))
+            if cross_destination_key in ambiguous_cross_destination_carton_measurements:
+                raise ValueError(
+                    f"{dest} carton {rec['carton']}: অন্য Destination-এর Format sheet-এও "
+                    "এই Carton/Style/Issue/Blister combination-এর একাধিক Measurement আছে। "
+                    "সঠিক Format sheet নির্ধারণ করুন।"
+                )
+            measurement = cross_destination_carton_measurements.get(cross_destination_key, "")
+
+        # 3) Backward-compatible fallback to destination-wide exact qty mapping,
+        # then cross-destination exact qty mapping only when each is unambiguous.
+        if not measurement:
+            if measure_key in ambiguous_measurements:
+                raise ValueError(
+                    f"{dest} / Style {rec['style']} / Issue {units(rec['issue'])} / "
+                    f"Blister {units(rec['shipper'])}: একাধিক Measurement আছে এবং "
+                    "এই Carton Number-এর নির্দিষ্ট মাপ পাওয়া যায়নি।"
+                )
+            measurement = format_measurements.get(measure_key, "")
+        if not measurement:
+            global_key = (style_key, issue_key, blister_key)
             if global_key in ambiguous_global_measurements:
                 raise ValueError(
-                    f"{dest} carton {rec['carton']}: এই Issue/Blister Qty-এর জন্য Format-এ "
-                    "একাধিক আলাদা Measurement আছে এবং Destination অনুযায়ী নির্দিষ্ট মাপ নেই।"
+                    f"{dest} carton {rec['carton']}: এই Issue/Blister Qty-এর জন্য "
+                    "অন্য Format sheet-এ একাধিক Measurement আছে এবং Carton Number অনুযায়ী "
+                    "একটি নির্দিষ্ট মাপ পাওয়া যায়নি।"
                 )
             measurement = global_measurements.get(global_key, "")
         # User-confirmed fallback dimension for Blister Qty 01.
