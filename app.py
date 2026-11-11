@@ -387,7 +387,7 @@ def make_output(template_upload, records, qc_rows):
         measurement = clean_measurement(data_sheet["C13"].value)
         carton_key = pack_key(data_sheet["D15"].value)
         if carton_key and measurement:
-            carton_lookup = (dest, style_key, carton_key)
+            carton_lookup = (dest, style_key, carton_key, blister_key)
             if (carton_lookup in format_carton_measurements
                     and format_carton_measurements[carton_lookup] != measurement):
                 ambiguous_format_carton_measurements.add(carton_lookup)
@@ -437,12 +437,13 @@ def make_output(template_upload, records, qc_rows):
 
         blister_key = pack_key(rec["shipper"])
         carton_key = pack_key(rec["carton"])
-        carton_lookup = (dest, style_key, carton_key)
+        carton_lookup = (dest, style_key, carton_key, blister_key)
 
-        # PRIMARY: use the exact destination + style + carton sheet from the
+        # PRIMARY: use the exact destination + style + carton + blister qty
+        # sheet from the
         # Shipping Mark Format. C13 is the dimension already calculated by
-        # that format sheet from its own Blister Qty. Packing List qty mismatch
-        # must not block this exact carton measurement.
+        # that format sheet from its own Blister Qty. A sheet whose Blister Qty
+        # differs from the Packing List must not be used for that carton.
         if carton_lookup in ambiguous_format_carton_measurements:
             raise ValueError(
                 f"{dest} carton {rec['carton']}: Shipping Mark Format-এ একই Carton-এর "
@@ -450,8 +451,8 @@ def make_output(template_upload, records, qc_rows):
             )
         measurement = format_carton_measurements.get(carton_lookup, "")
 
-        # SECONDARY: if a carton sheet is genuinely absent, use a measurement
-        # only when this destination/style/blister quantity has one unique size.
+        # SECONDARY: if an exact carton + blister sheet is absent, use a
+        # destination/style/blister mapping only when it has one unique size.
         if not measurement and blister_key:
             candidates = format_qty_measurements.get((dest, style_key, blister_key), set())
             if len(candidates) == 1:
@@ -511,7 +512,7 @@ def make_output(template_upload, records, qc_rows):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
-    report.append(["Measurement source", "PASS", "Measurement is taken from the exact Destination + Style + Carton sheet in the uploaded Shipping Mark Format (C13), which uses that format sheet's own Blister Qty. Packing List quantity mismatch does not block the format's carton-specific measurement. If a carton sheet is absent, a same-Destination/style/blister mapping is used only when it has one unique dimension."])
+    report.append(["Measurement source", "PASS", "Measurement is taken from the exact Destination + Style + Carton + Blister Qty sheet in the uploaded Shipping Mark Format (C13). If the exact carton sheet is absent, a same-Destination/style/blister mapping is used only when it has one unique dimension; conflicting dimensions are not guessed."])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
