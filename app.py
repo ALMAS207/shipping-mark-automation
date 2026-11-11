@@ -235,6 +235,7 @@ def build_records(upload):
         last = {"colour": "", "key": "", "size": ""}
         first_data = 44
         made_here = 0
+        normalization_notes = []
         expected_cartons = None
         # Summary header is in row 34; its total is commonly in the same
         # column on the ORDER NO. row (row 38). Search below the header.
@@ -262,10 +263,21 @@ def build_records(upload):
                     f"Start='{text(start)}', End='{text(end)}'। "
                     "001 বা 1.0 গ্রহণযোগ্য; দুই পাশেই সঠিক Carton Number দিন।"
                 )
+            # Auto-normalize harmless Excel formatting issues and record them for QC.
+            for raw_value, label in ((start, "Carton Start"), (end, "Carton End")):
+                if isinstance(raw_value, str):
+                    compact = re.sub(r"\\s+", "", raw_value)
+                    if compact != raw_value:
+                        normalization_notes.append(f"Row {r}: {label}-এর অতিরিক্ত Space বাদ দেওয়া হয়েছে")
+                    if re.fullmatch(r"0+\\d+", compact) and int(compact) > 0:
+                        normalization_notes.append(f"Row {r}: {label} '{raw_value}' থেকে leading zero বাদ দিয়ে {int(compact)} নেওয়া হয়েছে")
             for field in ("colour", "key", "size"):
                 value = get_cell(rows, r, cols[field])
-                if value not in (None, "") and not is_ditto(value):
-                    last[field] = text(value)
+                if not is_blank(value) and not is_ditto(value):
+                    cleaned = text(value)
+                    if isinstance(value, str) and value != value.strip():
+                        normalization_notes.append(f"Row {r}: {field.title()} field-এর অতিরিক্ত বাইরের Space বাদ দেওয়া হয়েছে")
+                    last[field] = cleaned
             issue = get_cell(rows, r, cols["issue"])
             shipper = get_cell(rows, r, cols["shipper"])
             # Measurement is NOT read from the Packing List. It is matched
@@ -299,7 +311,8 @@ def build_records(upload):
                 "Carton range এবং TTL CTNS মিলিয়ে নিন।"
             )
         qc.append({"destination": dest, "generated": made_here, "expected": expected_cartons,
-                   "status": "PASS" if expected_cartons in (None, made_here) else "REVIEW"})
+                   "status": "PASS" if expected_cartons in (None, made_here) else "REVIEW",
+                   "notes": list(dict.fromkeys(normalization_notes))})
     if not records:
         raise ValueError("Destination Sheet-এ carton range পাওয়া যায়নি।")
     seen = set()
@@ -488,6 +501,8 @@ def make_output(template_upload, records, qc_rows):
                   if item["expected"] is not None else "Packing List total not found; ")
         detail += f"Generated labels: {item['generated']}"
         report.append([f"{item['destination']} carton count", item["status"], detail])
+        if item.get("notes"):
+            report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
     report.append(["Measurement source", "PASS", "Measurement selected by Destination + Style + Issue Qty + Blister Qty; user-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists"])
@@ -514,7 +529,7 @@ def make_output(template_upload, records, qc_rows):
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -552,6 +567,8 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - একই Blister সমন্বয়ে Format-এ একাধিক ভিন্ন মাপ থাকলে বা মিল না পেলে QC REPORT-এ MISSING দেখাবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
+    - Carton Number 001 / 1 / 1.0, leading/trailing spaces স্বয়ংক্রিয়ভাবে normalize হবে; auto-fix QC REPORT-এ log হবে
+    - Critical missing data, invalid range, duplicate carton বা carton summary mismatch থাকলে ভুল Label না বানিয়ে Generate বন্ধ হবে
     - Measurement Format-এ যেভাবে দেওয়া আছে সেভাবেই রাখা হবে; L/W/H label থাকলে শুধু dimension value পরিষ্কার করে দেখানো হবে
     - Shipping Mark Format-এর Hanger Logo-এর size ও position অপরিবর্তিত থাকবে
     """)
