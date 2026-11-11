@@ -451,12 +451,8 @@ def make_output(template_upload, records, qc_rows):
         # Shipping Mark Format. C13 is the dimension already calculated by
         # that format sheet from its own Blister Qty. A sheet whose Blister Qty
         # differs from the Packing List must not be used for that carton.
-        if carton_lookup in ambiguous_format_carton_measurements:
-            raise ValueError(
-                f"{dest} carton {rec['carton']}: Shipping Mark Format-এ একই Carton-এর "
-                "জন্য একাধিক আলাদা Measurement পাওয়া গেছে। Format sheet যাচাই করুন।"
-            )
-        measurement = format_carton_measurements.get(carton_lookup, "")
+        # Conflicting measurements are treated as unmatched; do not stop label generation.
+        measurement = "" if carton_lookup in ambiguous_format_carton_measurements else format_carton_measurements.get(carton_lookup, "")
 
         # If the same carton appears more than once in the Format with the
         # same dimension, treat it as one measurement (duplicates are harmless).
@@ -475,12 +471,9 @@ def make_output(template_upload, records, qc_rows):
             candidates = format_qty_measurements.get((dest, style_key, blister_key), set())
             if len(candidates) == 1:
                 measurement = next(iter(candidates))
+            # Multiple candidate dimensions are ambiguous; leave blank rather than guess.
             elif len(candidates) > 1:
-                raise ValueError(
-                    f"{dest} carton {rec['carton']}: Format-এ এই Blister Qty "
-                    f"{units(rec['shipper'])}-এর একাধিক Measurement আছে, কিন্তু Carton-এর "
-                    "নির্দিষ্ট Sheet নেই। সঠিক Carton Sheet যোগ করুন।"
-                )
+                measurement = ""
 
         # Measurement is optional for label generation. If no reliable match
         # exists, leave the measurement cell blank and record it in QC REPORT.
