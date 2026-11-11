@@ -357,17 +357,13 @@ def make_output(template_upload, records, qc_rows):
 
     # Format workbook uses numbered carton sheets (e.g. SYDNEY_001),
     # not sheets named "AU SYDNEY MASTER". Use B2 for destination and C6 for style.
-    format_measurements = {}
-    ambiguous_measurements = set()
-    global_measurements = {}
-    ambiguous_global_measurements = set()
-    # Per-carton lookup: the format workbook contains one sheet per carton.
-    # Prefer the same destination, then reuse an exact matching carton/qty
-    # measurement found on another destination sheet.
-    destination_carton_measurements = {}
-    ambiguous_destination_carton_measurements = set()
-    cross_destination_carton_measurements = {}
-    ambiguous_cross_destination_carton_measurements = set()
+    # Measurement is taken from the uploaded Shipping Mark Format itself.
+    # Each numbered destination sheet already contains the correct calculated
+    # dimension in C13 for its carton. Do not reject it because Packing List
+    # Blister Qty differs from the Format sheet's Blister Qty.
+    format_carton_measurements = {}
+    ambiguous_format_carton_measurements = set()
+    format_qty_measurements = {}
     format_bases = {}
     images_by_key = {}
     master_sheets = []
@@ -378,53 +374,31 @@ def make_output(template_upload, records, qc_rows):
         # so use the sheet title as a fallback destination identifier.
         dest = destination_key(data_sheet["B2"].value) or destination_key(candidate.title)
         style_key = norm_key(data_sheet["C6"].value)
-        if "MASTER" in norm_key(candidate.title) and dest:
+        # Keep the original destination master sheet (e.g. AU SYDNEY)
+        # as well as all generated carton labels.
+        if dest and norm_key(candidate.title) == norm_key("AU " + dest):
             master_sheets.append(candidate)
         if not dest or not style_key:
             continue
         key = (dest, style_key)
         format_bases.setdefault(key, candidate)
 
-        issue_key = pack_key(data_sheet["C8"].value)
         blister_key = pack_key(data_sheet["C9"].value)
         measurement = clean_measurement(data_sheet["C13"].value)
-        if issue_key and blister_key and measurement:
-            measure_key = (dest, style_key, issue_key, blister_key)
-            if measure_key in format_measurements and format_measurements[measure_key] != measurement:
-                ambiguous_measurements.add(measure_key)
+        carton_key = pack_key(data_sheet["D15"].value)
+        if carton_key and measurement:
+            carton_lookup = (dest, style_key, carton_key)
+            if (carton_lookup in format_carton_measurements
+                    and format_carton_measurements[carton_lookup] != measurement):
+                ambiguous_format_carton_measurements.add(carton_lookup)
             else:
-                format_measurements[measure_key] = measurement
-            global_key = (style_key, issue_key, blister_key)
-            if global_key in global_measurements and global_measurements[global_key] != measurement:
-                ambiguous_global_measurements.add(global_key)
-            else:
-                global_measurements[global_key] = measurement
-
-            carton_key = pack_key(data_sheet["D15"].value)
-            if carton_key:
-                destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
-                if (destination_carton_key in destination_carton_measurements
-                        and destination_carton_measurements[destination_carton_key] != measurement):
-                    ambiguous_destination_carton_measurements.add(destination_carton_key)
-                else:
-                    destination_carton_measurements[destination_carton_key] = measurement
-
-                cross_destination_key = (style_key, issue_key, blister_key, carton_key)
-                if (cross_destination_key in cross_destination_carton_measurements
-                        and cross_destination_carton_measurements[cross_destination_key] != measurement):
-                    ambiguous_cross_destination_carton_measurements.add(cross_destination_key)
-                else:
-                    cross_destination_carton_measurements[cross_destination_key] = measurement
+                format_carton_measurements[carton_lookup] = measurement
+            # Secondary fallback is allowed only when a destination/style/
+            # blister-qty combination points to one unique dimension.
+            if blister_key:
+                qty_lookup = (dest, style_key, blister_key)
+                format_qty_measurements.setdefault(qty_lookup, set()).add(measurement)
     data_wb.close()
-
-    for key in ambiguous_measurements:
-        format_measurements.pop(key, None)
-    for key in ambiguous_global_measurements:
-        global_measurements.pop(key, None)
-    for key in ambiguous_destination_carton_measurements:
-        destination_carton_measurements.pop(key, None)
-    for key in ambiguous_cross_destination_carton_measurements:
-        cross_destination_carton_measurements.pop(key, None)
 
     used_keys = list(dict.fromkeys((rec["dest"], norm_key(rec["style"])) for rec in records))
     base_by_key = {}
@@ -461,63 +435,38 @@ def make_output(template_upload, records, qc_rows):
         key = (dest, style_key)
         master = base_by_key[key]
 
-        issue_key = pack_key(rec["issue"])
         blister_key = pack_key(rec["shipper"])
         carton_key = pack_key(rec["carton"])
-        measure_key = (dest, style_key, issue_key, blister_key)
-        destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
-        cross_destination_key = (style_key, issue_key, blister_key, carton_key)
+        carton_lookup = (dest, style_key, carton_key)
 
-        # 1) Exact destination + style + issue qty + blister qty + carton number.
-        if destination_carton_key in ambiguous_destination_carton_measurements:
+        # PRIMARY: use the exact destination + style + carton sheet from the
+        # Shipping Mark Format. C13 is the dimension already calculated by
+        # that format sheet from its own Blister Qty. Packing List qty mismatch
+        # must not block this exact carton measurement.
+        if carton_lookup in ambiguous_format_carton_measurements:
             raise ValueError(
-                f"{dest} carton {rec['carton']}: একই Destination/Carton/Quantity-এর জন্য "
-                "Format-এ একাধিক আলাদা Measurement আছে। Format sheet যাচাই করুন।"
+                f"{dest} carton {rec['carton']}: Shipping Mark Format-এ একই Carton-এর "
+                "জন্য একাধিক আলাদা Measurement পাওয়া গেছে। Format sheet যাচাই করুন।"
             )
-        measurement = destination_carton_measurements.get(destination_carton_key, "")
+        measurement = format_carton_measurements.get(carton_lookup, "")
 
-        # 2) If this destination has no carton sheet, reuse the same carton and
-        # exact style/quantity combination from another destination (Sydney,
-        # Brisbane, Perth, etc.). This avoids guessing from a different carton.
-        if not measurement:
-            if cross_destination_key in ambiguous_cross_destination_carton_measurements:
+        # SECONDARY: if a carton sheet is genuinely absent, use a measurement
+        # only when this destination/style/blister quantity has one unique size.
+        if not measurement and blister_key:
+            candidates = format_qty_measurements.get((dest, style_key, blister_key), set())
+            if len(candidates) == 1:
+                measurement = next(iter(candidates))
+            elif len(candidates) > 1:
                 raise ValueError(
-                    f"{dest} carton {rec['carton']}: অন্য Destination-এর Format sheet-এও "
-                    "এই Carton/Style/Issue/Blister combination-এর একাধিক Measurement আছে। "
-                    "সঠিক Format sheet নির্ধারণ করুন।"
+                    f"{dest} carton {rec['carton']}: Format-এ এই Blister Qty "
+                    f"{units(rec['shipper'])}-এর একাধিক Measurement আছে, কিন্তু Carton-এর "
+                    "নির্দিষ্ট Sheet নেই। সঠিক Carton Sheet যোগ করুন।"
                 )
-            measurement = cross_destination_carton_measurements.get(cross_destination_key, "")
 
-        # 3) Backward-compatible fallback to destination-wide exact qty mapping,
-        # then cross-destination exact qty mapping only when each is unambiguous.
-        if not measurement:
-            if measure_key in ambiguous_measurements:
-                raise ValueError(
-                    f"{dest} / Style {rec['style']} / Issue {units(rec['issue'])} / "
-                    f"Blister {units(rec['shipper'])}: একাধিক Measurement আছে এবং "
-                    "এই Carton Number-এর নির্দিষ্ট মাপ পাওয়া যায়নি।"
-                )
-            measurement = format_measurements.get(measure_key, "")
-        if not measurement:
-            global_key = (style_key, issue_key, blister_key)
-            if global_key in ambiguous_global_measurements:
-                raise ValueError(
-                    f"{dest} carton {rec['carton']}: এই Issue/Blister Qty-এর জন্য "
-                    "অন্য Format sheet-এ একাধিক Measurement আছে এবং Carton Number অনুযায়ী "
-                    "একটি নির্দিষ্ট মাপ পাওয়া যায়নি।"
-                )
-            measurement = global_measurements.get(global_key, "")
-        # User-confirmed fallback dimension for Blister Qty 01.
-        # A specific matching format measurement always takes priority.
-        used_confirmed_default = False
-        if not measurement and pack_key(rec["shipper"]) == "1":
-            measurement = "48X34X10 CM"
-            used_confirmed_default = True
         if not measurement:
             raise ValueError(
-                f"{dest} carton {rec['carton']}: Issue Qty {units(rec['issue'])} ও "
-                f"Blister Qty {units(rec['shipper'])}-এর জন্য Shipping Mark Format-এ Measurement নেই। "
-                "সঠিক Format Measurement যোগ করে আবার Generate করুন।"
+                f"{dest} carton {rec['carton']}: Shipping Mark Format-এ এই Destination/Style/Carton-এর "
+                "Measurement Sheet পাওয়া যায়নি। Format-এর Carton Sheet যোগ করুন।"
             )
 
         sh = wb.copy_worksheet(master)
@@ -562,7 +511,7 @@ def make_output(template_upload, records, qc_rows):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
-    report.append(["Measurement source", "PASS", "Exact carton number + Style + Issue Qty + Blister Qty is matched first in the same Destination; if absent, the same exact carton/Style/Qty combination is searched across other Destination sheets (Sydney, Brisbane, Perth, etc.). Only if no carton-specific entry exists is the older unambiguous quantity mapping used. User-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists."])
+    report.append(["Measurement source", "PASS", "Measurement is taken from the exact Destination + Style + Carton sheet in the uploaded Shipping Mark Format (C13), which uses that format sheet's own Blister Qty. Packing List quantity mismatch does not block the format's carton-specific measurement. If a carton sheet is absent, a same-Destination/style/blister mapping is used only when it has one unique dimension."])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
@@ -586,7 +535,7 @@ def make_output(template_upload, records, qc_rows):
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement সরাসরি Shipping Mark Format-এর একই Destination + Style + Carton Sheet-এর C13 থেকে নেবে; ওই Format Sheet-এর নিজস্ব Blister Qty অনুযায়ী নির্ধারিত Measurement ব্যবহার করবে। Packing List-এর Blister Qty আলাদা হলেও Format-এর নির্দিষ্ট Carton Measurement ব্যবহার হবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -620,8 +569,8 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - Colour: Column G | Keycode: Column I | Size: Column J
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
     - Measurement Format: D15 (Carton No.), C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
-    - Measurement selection: প্রথমে একই Destination + Carton No. + Style + Issue Qty + Blister Qty; সেখানে না পেলে Sydney / Brisbane / Perth / অন্য Destination sheet-এ একই Carton No. + Style + Qty মিলিয়ে Measurement বসবে
-    - একই Blister সমন্বয়ে Format-এ একাধিক ভিন্ন মাপ থাকলে বা মিল না পেলে QC REPORT-এ MISSING দেখাবে
+    - Measurement selection: একই Destination + Style + Carton No. অনুযায়ী Shipping Mark Format-এর numbered sheet থেকে C13 Measurement নেবে; Format sheet-এর নিজস্ব Blister Qty অনুযায়ী dimension নির্ধারিত থাকবে
+    - নির্দিষ্ট Carton Sheet না থাকলে একই Destination + Style + Blister Qty-এর Measurement কেবল একটিমাত্র unique dimension হলে fallback হবে; একাধিক হলে ভুল মাপ না বসিয়ে স্পষ্ট error দেখাবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
     - Carton Number 001 / 1 / 1.0, leading/trailing spaces স্বয়ংক্রিয়ভাবে normalize হবে; auto-fix QC REPORT-এ log হবে
