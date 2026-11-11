@@ -562,7 +562,7 @@ def make_output(template_upload, records, qc_rows):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
-    report.append(["Measurement source", "PASS", "Measurement selected by Destination + Style + Issue Qty + Blister Qty; user-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists"])
+    report.append(["Measurement source", "PASS", "Exact carton number + Style + Issue Qty + Blister Qty is matched first in the same Destination; if absent, the same exact carton/Style/Qty combination is searched across other Destination sheets (Sydney, Brisbane, Perth, etc.). Only if no carton-specific entry exists is the older unambiguous quantity mapping used. User-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists."])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
@@ -586,7 +586,7 @@ def make_output(template_upload, records, qc_rows):
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -619,8 +619,8 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - Carton Range: Column A–B, Row 44 থেকে; 001 / 1 / 1.0 numeric text গ্রহণযোগ্য, output-এ leading zero বাদ যাবে
     - Colour: Column G | Keycode: Column I | Size: Column J
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
-    - Measurement Format-এর Blister/QTY অনুযায়ী মিলবে: C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
-    - Packing List-এর Style + Issue Qty + Shipper/Blister Qty-এর সঙ্গে Format-এর একই সমন্বয় মিলিয়ে Measurement বসবে; Carton No. দিয়ে মাপ নির্বাচন হবে না
+    - Measurement Format: D15 (Carton No.), C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
+    - Measurement selection: প্রথমে একই Destination + Carton No. + Style + Issue Qty + Blister Qty; সেখানে না পেলে Sydney / Brisbane / Perth / অন্য Destination sheet-এ একই Carton No. + Style + Qty মিলিয়ে Measurement বসবে
     - একই Blister সমন্বয়ে Format-এ একাধিক ভিন্ন মাপ থাকলে বা মিল না পেলে QC REPORT-এ MISSING দেখাবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
