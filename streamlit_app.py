@@ -25,8 +25,24 @@ def text(v):
         return str(int(v))
     return str(v).strip()
 
+def parse_carton_number(value):
+    """Accept Excel numeric cells and numeric text such as '001', ' 001 ', or '1.0'."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return int(number) if number.is_integer() and number >= 0 else None
+    s = re.sub(r"\\s+", "", str(value)).replace(",", "")
+    if not re.fullmatch(r"\\d+(?:\\.0+)?", s):
+        return None
+    try:
+        number = float(s)
+        return int(number) if number.is_integer() else None
+    except (TypeError, ValueError):
+        return None
+
 def is_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return parse_carton_number(v) is not None
 
 def is_ditto(v):
     return text(v).strip() in ('"', "''", "“", "”", "〃")
@@ -59,21 +75,37 @@ def read_sheets(upload):
     name = upload.name.lower()
     result = {}
     def norm_sheet_name(value):
-        return re.sub(r"[^A-Z]", "", text(value).upper())
-    wanted = {norm_sheet_name(k): k for k in DESTINATIONS}
+        return re.sub(r"[^A-Z0-9]", "", text(value).upper())
+
+    def match_destination(sheet_title):
+        normalized = norm_sheet_name(sheet_title)
+        matches = []
+        for destination in DESTINATIONS:
+            dest_key = norm_sheet_name(destination)
+            # Accept SYDNEY, SYDNEY<spaces>, AU SYDNEY, AU/SYDNEY, etc.
+            prefix = normalized[:-len(dest_key)] if normalized.endswith(dest_key) else None
+            if prefix in ("", "AU", "AUS"):
+                matches.append(destination)
+        if len(matches) > 1:
+            raise ValueError(f"Sheet name '{sheet_title}' একাধিক Destination-এর সঙ্গে মিলে যাচ্ছে।")
+        return matches[0] if matches else None
     if name.endswith(".xls"):
         book = xlrd.open_workbook(file_contents=data)
         for i in range(book.nsheets):
             sh = book.sheet_by_index(i)
-            key = wanted.get(norm_sheet_name(sh.name))
+            key = match_destination(sh.name)
             if key:
+                if key in result:
+                    raise ValueError(f"{key} Destination-এর একাধিক Sheet পাওয়া গেছে। Sheet name ঠিক করুন।")
                 result[key] = [[sh.cell_value(r, col) for col in range(sh.ncols)]
                                for r in range(sh.nrows)]
     elif name.endswith((".xlsx", ".xlsm")):
         book = load_workbook(BytesIO(data), data_only=True, read_only=True)
         for sh in book.worksheets:
-            key = wanted.get(norm_sheet_name(sh.title))
+            key = match_destination(sh.title)
             if key:
+                if key in result:
+                    raise ValueError(f"{key} Destination-এর একাধিক Sheet পাওয়া গেছে। Sheet name ঠিক করুন।")
                 result[key] = [[sh.cell(r, col).value for col in range(1, sh.max_column + 1)]
                                for r in range(1, sh.max_row + 1)]
         book.close()
@@ -208,16 +240,25 @@ def build_records(upload):
                 if isinstance(v, str) and "TTL CTNS" in v.upper():
                     for summary_row in range(ri + 1, min(ri + 7, len(rows))):
                         candidate = get_cell(rows, summary_row + 1, ci)
-                        if is_number(candidate):
-                            expected_cartons = int(candidate)
+                        parsed_total = parse_carton_number(candidate)
+                        if parsed_total is not None:
+                            expected_cartons = parsed_total
                             break
                     break
             if expected_cartons is not None:
                 break
         for r in range(first_data, len(rows) + 1):
             start, end = get_cell(rows, r, 1), get_cell(rows, r, 2)
-            if not (is_number(start) and is_number(end)):
+            carton_start = parse_carton_number(start)
+            carton_end = parse_carton_number(end)
+            if carton_start is None and carton_end is None:
                 continue
+            if carton_start is None or carton_end is None:
+                raise ValueError(
+                    f"{dest} Sheet, Row {r}: Carton range অসম্পূর্ণ/ভুল। "
+                    f"Start='{text(start)}', End='{text(end)}'। "
+                    "001 বা 1.0 গ্রহণযোগ্য; দুই পাশেই সঠিক Carton Number দিন।"
+                )
             for field in ("colour", "key", "size"):
                 value = get_cell(rows, r, cols[field])
                 if value not in (None, "") and not is_ditto(value):
@@ -233,7 +274,7 @@ def build_records(upload):
             ] if value in (None, "")]
             if missing:
                 raise ValueError(f"{dest} Sheet, Row {r}: তথ্য missing: {', '.join(missing)}")
-            a, b = int(start), int(end)
+            a, b = carton_start, carton_end
             if b < a:
                 raise ValueError(f"{dest} Sheet, Row {r}: Carton range ভুল ({a}-{b})।")
             for carton in range(a, b + 1):
@@ -470,7 +511,7 @@ def make_output(template_upload, records, qc_rows):
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -494,13 +535,13 @@ if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=
             st.info("ভুল mapping হলে Excel-এর header অনুযায়ী শনাক্তকরণ উন্নত করতে হবে; কোনো তথ্য অনুমান করে পূরণ করা হয় না।")
 
 st.divider()
-st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের অতিরিক্ত space উপেক্ষা হবে; Format-এর numbered sheet থেকে Destination + Style অনুযায়ী layout এবং Blister Qty অনুযায়ী Measurement নেওয়া হবে।")
+st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের extra space, slash, hyphen এবং AU prefix উপেক্ষা হবে; Carton range-এ 001 / 1 / 1.0 numeric text গ্রহণযোগ্য এবং output carton number-এ leading zero বাদ যাবে; Format-এর numbered sheet থেকে Destination + Style অনুযায়ী layout এবং Blister Qty অনুযায়ী Measurement নেওয়া হবে।")
 st.caption("AU SYDNEY master sheet-সহ Format-এর সব প্রাসঙ্গিক Destination Master Sheet output-এ রাখা হবে; Carton label-গুলো Master Layout থেকে তৈরি হবে।")
 
 with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expanded=True):
     st.markdown("""
-    - Destination Sheet: SYDNEY, MELBOURNE, BRISBANE, PERTH (যে Sheet থাকবে শুধু সেটিই process হবে)
-    - Carton Range: Column A–B, Row 44 থেকে
+    - Destination Sheet: SYDNEY, MELBOURNE, BRISBANE, PERTH; extra space, slash, hyphen এবং AU prefix থাকলেও চিনবে
+    - Carton Range: Column A–B, Row 44 থেকে; 001 / 1 / 1.0 numeric text গ্রহণযোগ্য, output-এ leading zero বাদ যাবে
     - Colour: Column G | Keycode: Column I | Size: Column J
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
     - Measurement Format-এর Blister/QTY অনুযায়ী মিলবে: C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
