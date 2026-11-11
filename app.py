@@ -482,12 +482,16 @@ def make_output(template_upload, records, qc_rows):
                     "নির্দিষ্ট Sheet নেই। সঠিক Carton Sheet যোগ করুন।"
                 )
 
+        # Measurement is optional for label generation. If no reliable match
+        # exists, leave the measurement cell blank and record it in QC REPORT.
+        # Never guess a dimension from another carton/style/destination.
         if not measurement:
-            raise ValueError(
-                f"{dest} carton {rec['carton']}: এই Destination/Style/Carton-এর জন্য Format-এ "
-                "একাধিক আলাদা Measurement আছে অথবা Carton নম্বর মেলেনি। "
-                "Format-এর numbered sheet-এর D15 Carton No. এবং C13 Measurement যাচাই করুন।"
+            rec["measurement_note"] = (
+                f"{dest} carton {rec['carton']}: Measurement match পাওয়া যায়নি; "
+                "Shipping Mark তৈরি হয়েছে, Measurement cell ফাঁকা রাখা হয়েছে।"
             )
+        else:
+            rec["measurement_note"] = ""
 
         sh = wb.copy_worksheet(master)
         sh.title = f"{dest[:3]}-{int(rec['carton']):03d}"[:31]
@@ -501,7 +505,7 @@ def make_output(template_upload, records, qc_rows):
         sh["C9"] = units(rec["shipper"])
         sh["C10"] = rec["colour"]
         sh["C11"] = rec["size"]
-        sh["C13"] = measurement
+        sh["C13"] = measurement if measurement else ""
         sh["D15"] = str(int(rec["carton"]))
         sh["F15"] = str(total)
 
@@ -531,7 +535,13 @@ def make_output(template_upload, records, qc_rows):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
-    report.append(["Measurement source", "PASS", "Measurement is taken from the exact Destination + Style + Carton + Blister Qty sheet in the uploaded Shipping Mark Format (C13). If the exact carton sheet is absent, a same-Destination/style/blister mapping is used only when it has one unique dimension; conflicting dimensions are not guessed."])
+    matched_measurements = sum(1 for rec in records if rec.get("measurement"))
+    missing_measurements = [rec["measurement_note"] for rec in records if rec.get("measurement_note")]
+    report.append(["Measurement source", "PASS" if not missing_measurements else "WARNING",
+                   f"{matched_measurements}/{total} labels matched a reliable measurement from the uploaded Format. "
+                   f"{len(missing_measurements)} label(s) have blank Measurement; Shipping Mark generation was not blocked."])
+    if missing_measurements:
+        report.append(["Measurement not matched", "WARNING", "; ".join(missing_measurements[:100])])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
@@ -555,7 +565,7 @@ def make_output(template_upload, records, qc_rows):
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement সরাসরি Shipping Mark Format-এর একই Destination + Style + Carton Sheet-এর C13 থেকে নেবে; ওই Format Sheet-এর নিজস্ব Blister Qty অনুযায়ী নির্ধারিত Measurement ব্যবহার করবে। Packing List-এর Blister Qty আলাদা হলেও Format-এর নির্দিষ্ট Carton Measurement ব্যবহার হবে।")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর সঙ্গে না মিললেও Shipping Mark তৈরি হবে; সেক্ষেত্রে Measurement cell ফাঁকা থাকবে এবং QC REPORT-এ missing Measurement দেখাবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -579,7 +589,7 @@ if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=
             st.info("ভুল mapping হলে Excel-এর header অনুযায়ী শনাক্তকরণ উন্নত করতে হবে; কোনো তথ্য অনুমান করে পূরণ করা হয় না।")
 
 st.divider()
-st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের extra space, slash, hyphen এবং AU prefix উপেক্ষা হবে; Carton range-এ 001 / 1 / 1.0 numeric text গ্রহণযোগ্য এবং output carton number-এ leading zero বাদ যাবে; Format-এর numbered sheet থেকে Destination + Style অনুযায়ী layout এবং Blister Qty অনুযায়ী Measurement নেওয়া হবে।")
+st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের extra space, slash, hyphen এবং AU prefix উপেক্ষা হবে; Carton range-এ 001 / 1 / 1.0 numeric text গ্রহণযোগ্য এবং output carton number-এ leading zero বাদ যাবে; Format-এর numbered sheet থেকে Measurement মেলানোর চেষ্টা হবে, না মিললেও Shipping Mark তৈরি হবে এবং QC REPORT-এ জানাবে।")
 st.caption("AU SYDNEY master sheet-সহ Format-এর সব প্রাসঙ্গিক Destination Master Sheet output-এ রাখা হবে; Carton label-গুলো Master Layout থেকে তৈরি হবে।")
 
 with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expanded=True):
@@ -590,7 +600,7 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
     - Measurement Format: D15 (Carton No.), C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
     - Measurement selection: একই Destination + Style + Carton No. অনুযায়ী Shipping Mark Format-এর numbered sheet থেকে C13 Measurement নেবে; Format sheet-এর নিজস্ব Blister Qty অনুযায়ী dimension নির্ধারিত থাকবে
-    - নির্দিষ্ট Carton Sheet না থাকলে একই Destination + Style + Blister Qty-এর Measurement কেবল একটিমাত্র unique dimension হলে fallback হবে; একাধিক হলে ভুল মাপ না বসিয়ে স্পষ্ট error দেখাবে
+    - Measurement না মিললেও Shipping Mark তৈরি হবে; ভুল মাপ অনুমান করে বসাবে না, Measurement cell ফাঁকা রাখবে এবং QC REPORT-এ WARNING দেবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
     - Carton Number 001 / 1 / 1.0, leading/trailing spaces স্বয়ংক্রিয়ভাবে normalize হবে; auto-fix QC REPORT-এ log হবে
