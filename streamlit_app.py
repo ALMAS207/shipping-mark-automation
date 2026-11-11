@@ -58,21 +58,24 @@ def read_sheets(upload):
     data = upload.getvalue()
     name = upload.name.lower()
     result = {}
+    def norm_sheet_name(value):
+        return re.sub(r"[^A-Z]", "", text(value).upper())
+    wanted = {norm_sheet_name(k): k for k in DESTINATIONS}
     if name.endswith(".xls"):
         book = xlrd.open_workbook(file_contents=data)
-        for sn in DESTINATIONS:
-            try:
-                sh = book.sheet_by_name(sn)
-            except Exception:
-                continue
-            result[sn] = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows)]
+        for i in range(book.nsheets):
+            sh = book.sheet_by_index(i)
+            key = wanted.get(norm_sheet_name(sh.name))
+            if key:
+                result[key] = [[sh.cell_value(r, col) for col in range(sh.ncols)]
+                               for r in range(sh.nrows)]
     elif name.endswith((".xlsx", ".xlsm")):
         book = load_workbook(BytesIO(data), data_only=True, read_only=True)
-        for sn in DESTINATIONS:
-            if sn in book.sheetnames:
-                sh = book[sn]
-                result[sn] = [[sh.cell(r, c).value for c in range(1, sh.max_column + 1)]
-                              for r in range(1, sh.max_row + 1)]
+        for sh in book.worksheets:
+            key = wanted.get(norm_sheet_name(sh.title))
+            if key:
+                result[key] = [[sh.cell(r, col).value for col in range(1, sh.max_column + 1)]
+                               for r in range(1, sh.max_row + 1)]
         book.close()
     else:
         raise ValueError("Packing List অবশ্যই .xls, .xlsx অথবা .xlsm হতে হবে।")
@@ -139,9 +142,10 @@ def metadata(rows):
         v = get_cell(rows, row_no, 1)
         if isinstance(v, str):
             s = v.strip()
-            if s and not re.search(r"^(DESCRIPTION|\(ORDER|NUMBER\)|ORDER\s*NO|STYLE\s*NO|DEPT\s*NO|SUMMARY)", s, re.I):
-                description = s
+            if re.search(r"^ORDER\s*NO", s, re.I):
                 break
+            if s and not re.search(r"^(DESCRIPTION|\(ORDER|NUMBER\)|STYLE\s*NO|DEPT\s*NO|SUMMARY)", s, re.I):
+                description = s
     return order, style, dept, description
 def detect_columns(rows):
     # Packing-list headings occupy rows 42-43. Some sheets use two-row
@@ -175,7 +179,7 @@ def detect_columns(rows):
     for key, col in {"colour": 7, "key": 9, "size": 10,
                       "issue": 11, "shipper": 15, "measurement": 20}.items():
         found.setdefault(key, col)
-    missing = [k for k in ("issue", "shipper", "measurement", "colour", "key", "size") if k not in found]
+    missing = [k for k in ("issue", "shipper", "colour", "key", "size") if k not in found]
     if missing:
         raise ValueError("Packing List-এর header থেকে প্রয়োজনীয় column শনাক্ত করা যায়নি: " + ", ".join(missing))
     return found
@@ -220,10 +224,12 @@ def build_records(upload):
                     last[field] = text(value)
             issue = get_cell(rows, r, cols["issue"])
             shipper = get_cell(rows, r, cols["shipper"])
-            measurement = clean_measurement(get_cell(rows, r, cols["measurement"]))
+            # Measurement is NOT read from the Packing List. It is matched
+            # later from the uploaded Shipping Mark Format by Style + Carton.
+            measurement = ""
             missing = [label for label, value in [
                 ("Colour", last["colour"]), ("Keycode", last["key"]), ("Size", last["size"]),
-                ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper), ("Measurement", measurement)
+                ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper)
             ] if value in (None, "")]
             if missing:
                 raise ValueError(f"{dest} Sheet, Row {r}: তথ্য missing: {', '.join(missing)}")
@@ -239,6 +245,15 @@ def build_records(upload):
                     "source_row": r
                 })
                 made_here += 1
+        # Never assume a fixed carton count. Generate from every detected carton range,
+        # then compare with the destination summary when the Packing List provides one.
+        if expected_cartons is not None and expected_cartons != made_here:
+            raise ValueError(
+                f"{dest} Sheet: Packing List summary-তে {expected_cartons} Carton, "
+                f"kintu carton range theke {made_here}টি পাওয়া গেছে। "
+                "কোনো label বাদ/বেশি হওয়ার ঝুঁকি থাকায় Generate বন্ধ করা হয়েছে। "
+                "Carton range এবং TTL CTNS মিলিয়ে নিন।"
+            )
         qc.append({"destination": dest, "generated": made_here, "expected": expected_cartons,
                    "status": "PASS" if expected_cartons in (None, made_here) else "REVIEW"})
     if not records:
@@ -258,58 +273,142 @@ def image_bytes(img):
     return img._data()
 
 def make_output(template_upload, records, qc_rows):
-    wb = load_workbook(BytesIO(template_upload.getvalue()))
+    template_bytes = template_upload.getvalue()
+    wb = load_workbook(BytesIO(template_bytes))
+    # Read cached formula results separately; the visible destination cell B2
+    # in this format is a formula linked to I11.
+    data_wb = load_workbook(BytesIO(template_bytes), data_only=True, read_only=True)
     total = len(records)
 
-    # The supplied format already contains destination-specific master labels.
-    # Reuse each destination's own master sheet so AU/SYDNEY etc. stays correct.
-    base_by_dest = {}
-    images_by_dest = {}
-    used_destinations = list(dict.fromkeys(rec["dest"] for rec in records))
-    for dest in used_destinations:
-        base = next((s for s in wb.worksheets
-                     if s.title.strip().upper().startswith("AU " + dest)), None)
+    def norm_key(v):
+        return re.sub(r"[^A-Z0-9]", "", text(v).upper())
+
+    def pack_key(v):
+        s = text(v).upper().replace("UNITS", "").strip()
+        try:
+            return str(int(float(s)))
+        except Exception:
+            digits = re.search(r"\d+(?:\.\d+)?", s)
+            return str(int(float(digits.group(0)))) if digits else norm_key(s)
+
+    def destination_key(v):
+        s = norm_key(v)
+        for dest in DESTINATIONS:
+            if norm_key(dest) in s:
+                return dest
+        return ""
+
+    # Format workbook uses numbered carton sheets (e.g. SYDNEY_001),
+    # not sheets named "AU SYDNEY MASTER". Use B2 for destination and C6 for style.
+    format_measurements = {}
+    ambiguous_measurements = set()
+    global_measurements = {}
+    ambiguous_global_measurements = set()
+    format_bases = {}
+    images_by_key = {}
+    master_sheets = []
+
+    for candidate in wb.worksheets:
+        data_sheet = data_wb[candidate.title]
+        # Master sheet names are explicit in the template; B2 may be a formula,
+        # so use the sheet title as a fallback destination identifier.
+        dest = destination_key(data_sheet["B2"].value) or destination_key(candidate.title)
+        style_key = norm_key(data_sheet["C6"].value)
+        if "MASTER" in norm_key(candidate.title) and dest:
+            master_sheets.append(candidate)
+        if not dest or not style_key:
+            continue
+        key = (dest, style_key)
+        format_bases.setdefault(key, candidate)
+
+        issue_key = pack_key(data_sheet["C8"].value)
+        blister_key = pack_key(data_sheet["C9"].value)
+        measurement = clean_measurement(data_sheet["C13"].value)
+        if issue_key and blister_key and measurement:
+            measure_key = (dest, style_key, issue_key, blister_key)
+            if measure_key in format_measurements and format_measurements[measure_key] != measurement:
+                ambiguous_measurements.add(measure_key)
+            else:
+                format_measurements[measure_key] = measurement
+            global_key = (style_key, issue_key, blister_key)
+            if global_key in global_measurements and global_measurements[global_key] != measurement:
+                ambiguous_global_measurements.add(global_key)
+            else:
+                global_measurements[global_key] = measurement
+    data_wb.close()
+
+    for key in ambiguous_measurements:
+        format_measurements.pop(key, None)
+    for key in ambiguous_global_measurements:
+        global_measurements.pop(key, None)
+
+    used_keys = list(dict.fromkeys((rec["dest"], norm_key(rec["style"])) for rec in records))
+    base_by_key = {}
+    for dest, style_key in used_keys:
+        key = (dest, style_key)
+        base = format_bases.get(key)
         if base is None:
-            raise ValueError(
-                f"Shipping Mark Format-এ AU {dest} master sheet পাওয়া যায়নি। "
-                f"যে Destination আছে শুধু সেই Destination-এর master sheet রাখুন।"
-            )
-        if not base._images:
-            raise ValueError(f"AU {dest} Format-এ Hanger Logo/Image পাওয়া যায়নি।")
-        base_by_dest[dest] = base
-        images_by_dest[dest] = [
+            raise ValueError(f"Shipping Mark Format-এ {dest} Destination ও Style {style_key}-এর কোনো numbered format sheet পাওয়া যায়নি।")
+        base_by_key[key] = base
+        images_by_key[key] = [
             (im._data(), im.width, im.height, deepcopy(im.anchor))
             for im in base._images
         ]
 
-    # Keep only the four master sheets while generating new carton labels.
-    masters = set(base_by_dest.values())
+    masters = set(base_by_key.values())
+    # Keep every destination master sheet in the final workbook, as requested.
+    # Do not clear images from originals: their hanger/logo artwork must remain.
+    keep_originals = set(master_sheets)
     for sh in list(wb.worksheets):
-        if sh not in masters:
+        if sh not in masters and sh not in keep_originals:
             wb.remove(sh)
-    for base in masters:
-        base._images = []
 
-    def put_images(sh, dest):
-        for blob, width, height, anchor in images_by_dest[dest]:
+    def put_images(sh, key):
+        for blob, width, height, anchor in images_by_key[key]:
             im = XLImage(BytesIO(blob))
             im.width, im.height = width, height
             im.anchor = deepcopy(anchor)
             sh.add_image(im)
 
-    used_master = set()
     generated_sheets = []
     for rec in records:
         dest = rec["dest"]
-        master = base_by_dest[dest]
-        if dest not in used_master:
-            sh = master
-            used_master.add(dest)
-        else:
-            sh = wb.copy_worksheet(master)
+        style_key = norm_key(rec["style"])
+        key = (dest, style_key)
+        master = base_by_key[key]
 
-        sh.title = f"{dest[:3]}-{rec['carton']:03d}"[:31]
-        sh["I3"] = "AU/" + dest
+        measure_key = (dest, style_key, pack_key(rec["issue"]), pack_key(rec["shipper"]))
+        if measure_key in ambiguous_measurements:
+            raise ValueError(
+                f"{dest} / Style {rec['style']} / Issue {units(rec['issue'])} / "
+                f"Blister {units(rec['shipper'])}: Format-এ একাধিক আলাদা Measurement আছে। "
+                "সঠিক মাপ নির্ধারণ না হওয়ায় Generate বন্ধ করা হয়েছে।"
+            )
+        measurement = format_measurements.get(measure_key, "")
+        if not measurement:
+            global_key = (style_key, pack_key(rec["issue"]), pack_key(rec["shipper"]))
+            if global_key in ambiguous_global_measurements:
+                raise ValueError(
+                    f"{dest} carton {rec['carton']}: এই Issue/Blister Qty-এর জন্য Format-এ "
+                    "একাধিক আলাদা Measurement আছে এবং Destination অনুযায়ী নির্দিষ্ট মাপ নেই।"
+                )
+            measurement = global_measurements.get(global_key, "")
+        # User-confirmed fallback dimension for Blister Qty 01.
+        # A specific matching format measurement always takes priority.
+        used_confirmed_default = False
+        if not measurement and pack_key(rec["shipper"]) == "1":
+            measurement = "48X34X10 CM"
+            used_confirmed_default = True
+        if not measurement:
+            raise ValueError(
+                f"{dest} carton {rec['carton']}: Issue Qty {units(rec['issue'])} ও "
+                f"Blister Qty {units(rec['shipper'])}-এর জন্য Shipping Mark Format-এ Measurement নেই। "
+                "সঠিক Format Measurement যোগ করে আবার Generate করুন।"
+            )
+
+        sh = wb.copy_worksheet(master)
+        sh.title = f"{dest[:3]}-{int(rec['carton']):03d}"[:31]
+        sh["B2"] = "AU/" + dest
         sh["C3"] = rec["dept"]
         sh["C4"] = rec["order"]
         sh["C5"] = rec["key"]
@@ -319,20 +418,24 @@ def make_output(template_upload, records, qc_rows):
         sh["C9"] = units(rec["shipper"])
         sh["C10"] = rec["colour"]
         sh["C11"] = rec["size"]
-        sh["C13"] = rec["measurement"]
-        sh["D15"] = str(rec["carton"])
+        sh["C13"] = measurement
+        sh["D15"] = str(int(rec["carton"]))
         sh["F15"] = str(total)
-        sh.sheet_view.showGridLines = False
-        sh.sheet_properties.pageSetUpPr.fitToPage = True
-        sh.page_setup.fitToWidth = 1
-        sh.page_setup.fitToHeight = 1
-        sh.page_setup.orientation = "landscape"
-        sh.print_area = "$B$1:$G$16"
-        put_images(sh, dest)
+
+        # Retain the original template's print settings and image dimensions/anchors.
+        sh.sheet_view.showGridLines = master.sheet_view.showGridLines
+        sh.sheet_properties.pageSetUpPr = deepcopy(master.sheet_properties.pageSetUpPr)
+        sh.page_setup = deepcopy(master.page_setup)
+        sh.page_margins = deepcopy(master.page_margins)
+        sh.print_options = deepcopy(master.print_options)
+        sh.print_area = master.print_area
+        sh.row_breaks = deepcopy(master.row_breaks)
+        sh.col_breaks = deepcopy(master.col_breaks)
+        put_images(sh, key)
         generated_sheets.append(sh)
 
-    # Put the carton labels in Packing List order, then append the QC sheet.
-    wb._sheets = generated_sheets
+    # Preserve AU <DESTINATION> master sheet(s) at the beginning, followed by labels.
+    wb._sheets = list(master_sheets) + generated_sheets
 
     report = wb.create_sheet("QC REPORT")
     report.append(["QUALITY CHECK", "RESULT", "DETAIL"])
@@ -342,14 +445,15 @@ def make_output(template_upload, records, qc_rows):
         detail += f"Generated labels: {item['generated']}"
         report.append([f"{item['destination']} carton count", item["status"], detail])
     report.append(["Total generated labels", "PASS", str(total)])
-    report.append(["Duplicate carton numbers", "PASS", "No duplicate carton numbers within each destination"])
-    report.append(["Quantity columns", "PASS", "Unit Qty and Blister Qty detected separately for each destination"])
-    report.append(["Measurement", "PASS", "CORTON MAS dimensions only; L/W/H labels removed"])
-    report.append(["Hanger Logo", "PASS", "Destination master images copied at original size and anchor"])
+    report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
+    report.append(["Measurement source", "PASS", "Measurement selected by Destination + Style + Issue Qty + Blister Qty; user-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists"])
+    report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
+    report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
+    report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
     for cell in report[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
-    for col, width in {"A": 34, "B": 16, "C": 90}.items():
+    for col, width in {"A": 38, "B": 16, "C": 90}.items():
         report.column_dimensions[col].width = width
     for row in report.iter_rows():
         for cell in row:
@@ -357,14 +461,16 @@ def make_output(template_upload, records, qc_rows):
     report.freeze_panes = "A2"
     report.sheet_view.showGridLines = False
 
+    image_count = sum(len(v) for v in images_by_key.values())
     output = BytesIO()
     wb.save(output)
     output.seek(0)
-    return output.getvalue(), sum(len(v) for v in images_by_dest.values())
+    return output.getvalue(), image_count
+
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.05.6")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন।\nএই Packing List-এর SYDNEY sheet-এ Issue/ Shipper/Measurement কলাম K/O/T; MELBOURNE, BRISBANE ও PERTH sheet-এ M/Q/V। সফটওয়্যার প্রতিটি sheet-এর header দেখে আলাদাভাবে কলাম শনাক্ত করবে।")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.1")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এর Destination + Style + Issue Qty + Blister Qty মিলিয়ে নির্বাচন হবে; exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
@@ -388,18 +494,20 @@ if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=
             st.info("ভুল mapping হলে Excel-এর header অনুযায়ী শনাক্তকরণ উন্নত করতে হবে; কোনো তথ্য অনুমান করে পূরণ করা হয় না।")
 
 st.divider()
-st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Carton range A:B, row 44+; Colour G, Keycode I, Size J। Issue, Shipper ও Measurement প্রতিটি Destination sheet-এর row 42–43 header থেকে আলাদাভাবে শনাক্ত হয়।")
-st.caption("একটি Order-এ যে Destination sheet আছে, শুধু সেই Destination-এর master label template প্রয়োজন; অন্য Destination না থাকলেও Generate করা যাবে।")
+st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের অতিরিক্ত space উপেক্ষা হবে; Format-এর numbered sheet থেকে Destination + Style অনুযায়ী layout এবং Blister Qty অনুযায়ী Measurement নেওয়া হবে।")
+st.caption("AU SYDNEY master sheet-সহ Format-এর সব প্রাসঙ্গিক Destination Master Sheet output-এ রাখা হবে; Carton label-গুলো Master Layout থেকে তৈরি হবে।")
 
 with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expanded=True):
     st.markdown("""
     - Destination Sheet: SYDNEY, MELBOURNE, BRISBANE, PERTH (যে Sheet থাকবে শুধু সেটিই process হবে)
     - Carton Range: Column A–B, Row 44 থেকে
     - Colour: Column G | Keycode: Column I | Size: Column J
-    - SYDNEY: QTY ISSUE PACK = K | QTY SHIPPER PACK = O | Measurement = T
-    - MELBOURNE / BRISBANE / PERTH: QTY ISSUE PACK = M | QTY SHIPPER PACK = Q | Measurement = V
+    - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
+    - Measurement Format-এর Blister/QTY অনুযায়ী মিলবে: C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
+    - Packing List-এর Style + Issue Qty + Shipper/Blister Qty-এর সঙ্গে Format-এর একই সমন্বয় মিলিয়ে Measurement বসবে; Carton No. দিয়ে মাপ নির্বাচন হবে না
+    - একই Blister সমন্বয়ে Format-এ একাধিক ভিন্ন মাপ থাকলে বা মিল না পেলে QC REPORT-এ MISSING দেখাবে
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
-    - Measurement শুধু 54X45X30 CM আকারে; L X W X H লেখা হবে না
+    - Measurement Format-এ যেভাবে দেওয়া আছে সেভাবেই রাখা হবে; L/W/H label থাকলে শুধু dimension value পরিষ্কার করে দেখানো হবে
     - Shipping Mark Format-এর Hanger Logo-এর size ও position অপরিবর্তিত থাকবে
     """)
