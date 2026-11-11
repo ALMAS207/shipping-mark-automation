@@ -44,6 +44,9 @@ def parse_carton_number(value):
 def is_number(v):
     return parse_carton_number(v) is not None
 
+def is_blank(v):
+    return v is None or (isinstance(v, str) and not v.strip())
+
 def is_ditto(v):
     return text(v).strip() in ('"', "''", "“", "”", "〃")
 
@@ -271,7 +274,7 @@ def build_records(upload):
             missing = [label for label, value in [
                 ("Colour", last["colour"]), ("Keycode", last["key"]), ("Size", last["size"]),
                 ("QTY ISSUE PACK", issue), ("QTY SHIPPER PACK", shipper)
-            ] if value in (None, "")]
+            ] if is_blank(value)]
             if missing:
                 raise ValueError(f"{dest} Sheet, Row {r}: তথ্য missing: {', '.join(missing)}")
             a, b = carton_start, carton_end
