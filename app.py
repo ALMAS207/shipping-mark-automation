@@ -366,6 +366,8 @@ def make_output(template_upload, records, qc_rows):
     format_measurements = {}
     ambiguous_format_measurements = set()
     format_bases = {}
+    # Destination-level fallback layout: new styles can reuse the destination master.
+    destination_bases = {}
     images_by_key = {}
     master_sheets = []
 
@@ -375,6 +377,15 @@ def make_output(template_upload, records, qc_rows):
         # so use the sheet title as a fallback destination identifier.
         dest = destination_key(data_sheet["B2"].value) or destination_key(candidate.title)
         style_key = norm_key(data_sheet["C6"].value)
+        if dest:
+            current_base = destination_bases.get(dest)
+            title_key = norm_key(candidate.title)
+            is_master_layout = ("MASTER" in title_key or title_key == norm_key("AU " + dest))
+            current_is_master = (current_base is not None and
+                ("MASTER" in norm_key(current_base.title) or
+                 norm_key(current_base.title) == norm_key("AU " + dest)))
+            if current_base is None or (is_master_layout and not current_is_master):
+                destination_bases[dest] = candidate
         # Keep the original destination master sheet (e.g. AU SYDNEY)
         # as well as all generated carton labels.
         if dest and norm_key(candidate.title) == norm_key("AU " + dest):
@@ -407,7 +418,11 @@ def make_output(template_upload, records, qc_rows):
         key = (dest, style_key)
         base = format_bases.get(key)
         if base is None:
-            raise ValueError(f"Shipping Mark Format-এ {dest} Destination ও Style {style_key}-এর কোনো numbered format sheet পাওয়া যায়নি।")
+            # A style-specific numbered sheet is optional. Reuse the matching
+            # destination master layout (or a destination layout sheet) instead.
+            base = destination_bases.get(dest)
+        if base is None:
+            raise ValueError(f"Shipping Mark Format-এ {dest} Destination-এর কোনো Master/Format layout sheet পাওয়া যায়নি।")
         base_by_key[key] = base
         images_by_key[key] = [
             (im._data(), im.width, im.height, deepcopy(im.anchor))
@@ -507,7 +522,7 @@ def make_output(template_upload, records, qc_rows):
         if item.get("notes"):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
-    report.append(["Destination + Style", "PASS", "Every label uses the matching destination/style layout"])
+    report.append(["Destination + Style", "PASS", "Exact style layout used when available; otherwise the same destination master/layout is reused for new styles"])
     matched_measurements = sum(1 for rec in records if rec.get("measurement"))
     missing_measurements = [rec["measurement_note"] for rec in records if rec.get("measurement_note")]
     report.append(["Measurement source", "PASS" if not missing_measurements else "WARNING",
@@ -517,7 +532,7 @@ def make_output(template_upload, records, qc_rows):
         report.append(["Measurement not matched", "WARNING", "; ".join(missing_measurements[:100])])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
-    report.append(["Hanger Logo / Print Layout", "PASS", "Original layout retained; logo image size and position copied from matching destination/style format"])
+    report.append(["Hanger Logo / Print Layout", "PASS", "Original destination layout retained; logo image size, anchor/position and print settings copied from the selected template sheet"])
     for cell in report[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
