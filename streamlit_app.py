@@ -439,6 +439,7 @@ def make_output(template_upload, records, qc_rows):
 
     used_keys = list(dict.fromkeys((rec["dest"], norm_key(rec["style"])) for rec in records))
     base_by_key = {}
+    style_fallbacks = []
     for dest, style_key in used_keys:
         key = (dest, style_key)
         base = format_bases.get(key)
@@ -446,6 +447,8 @@ def make_output(template_upload, records, qc_rows):
             # A style-specific numbered sheet is optional. Reuse the matching
             # destination master layout (or a destination layout sheet) instead.
             base = destination_bases.get(dest)
+            if base is not None:
+                style_fallbacks.append((dest, style_key, base.title))
         if base is None:
             raise ValueError(f"Shipping Mark Format-এ {dest} Destination-এর কোনো Master/Format layout sheet পাওয়া যায়নি।")
         base_by_key[key] = base
@@ -545,6 +548,8 @@ def make_output(template_upload, records, qc_rows):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
     report.append(["Destination + Style", "PASS", "Exact style layout used when available; otherwise the same destination master/layout is reused for new styles"])
+    for fallback_dest, fallback_style, fallback_sheet in style_fallbacks:
+        report.append(["New style layout fallback", "INFO", f"{fallback_dest} / {fallback_style}: '{fallback_sheet}' layout used because no exact style sheet exists"])
     report.append(["Measurement source", "PASS", "Exact carton number + Style + Issue Qty + Blister Qty is matched first in the same Destination; if absent, the same exact carton/Style/Qty combination is searched across other Destination sheets (Sydney, Brisbane, Perth, etc.). Only if no carton-specific entry exists is the older unambiguous quantity mapping used. User-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists."])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
@@ -569,7 +574,7 @@ def make_output(template_upload, records, qc_rows):
 
 st.title("📦 Shipping Mark Automation Pro")
 st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.2")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
