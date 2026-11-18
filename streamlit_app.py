@@ -334,6 +334,12 @@ def make_output(template_upload, records, qc_rows):
     # in this format is a formula linked to I11.
     data_wb = load_workbook(BytesIO(template_bytes), data_only=True, read_only=True)
     total = len(records)
+    # The carton counter denominator must be destination-specific, not the
+    # grand total across Sydney/Melbourne/Brisbane/Perth. The numerator is
+    # the actual CTN NO. from the Packing List carton range.
+    destination_totals = {}
+    for record in records:
+        destination_totals[record["dest"]] = destination_totals.get(record["dest"], 0) + 1
 
     def norm_key(v):
         return re.sub(r"[^A-Z0-9]", "", text(v).upper())
@@ -583,7 +589,7 @@ def make_output(template_upload, records, qc_rows):
             if numeric_cells:
                 numeric_cells[0].value = int(rec["carton"])
                 if len(numeric_cells) > 1:
-                    numeric_cells[-1].value = total
+                    numeric_cells[-1].value = destination_totals.get(dest, total)
             else:
                 write_label(sh, "CARTON NO.", str(int(rec["carton"])))
 
@@ -612,6 +618,7 @@ def make_output(template_upload, records, qc_rows):
         if item.get("notes"):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
+    report.append(["Carton No. / OF serial rule", "PASS", "Carton No. uses the actual CTN NO. value from the Packing List range (not the PACK NO. grouping column). The OF denominator is the carton total for that Destination only, not the combined total across all Destinations. Destination totals: " + ", ".join(f"{d}={n}" for d, n in sorted(destination_totals.items()))])
     packing_orders = sorted({text(rec["order"]) for rec in records if text(rec.get("order"))})
     format_order_text = ", ".join(sorted(format_orders)) if format_orders else "not found in Format"
     report.append(["Order No. rule", "PASS", f"Packing List Order No. used: {', '.join(packing_orders)}. Format Order No. ({format_order_text}) is reference only and is NOT used to reject/pair files. Files are paired by Style No."])
