@@ -334,12 +334,9 @@ def make_output(template_upload, records, qc_rows):
     # in this format is a formula linked to I11.
     data_wb = load_workbook(BytesIO(template_bytes), data_only=True, read_only=True)
     total = len(records)
-    # The carton counter denominator must be destination-specific, not the
-    # grand total across Sydney/Melbourne/Brisbane/Perth. The numerator is
-    # the actual CTN NO. from the Packing List carton range.
-    destination_totals = {}
-    for record in records:
-        destination_totals[record["dest"]] = destination_totals.get(record["dest"], 0) + 1
+    # Use one continuous carton serial across all Destinations.
+    # Numerator comes from the Packing List CTN NO. range; OF is the
+    # grand total of all generated carton labels (e.g. 1 OF 259 ... 259 OF 259).
 
     def norm_key(v):
         return re.sub(r"[^A-Z0-9]", "", text(v).upper())
@@ -589,7 +586,7 @@ def make_output(template_upload, records, qc_rows):
             if numeric_cells:
                 numeric_cells[0].value = int(rec["carton"])
                 if len(numeric_cells) > 1:
-                    numeric_cells[-1].value = destination_totals.get(dest, total)
+                    numeric_cells[-1].value = total
             else:
                 write_label(sh, "CARTON NO.", str(int(rec["carton"])))
 
@@ -618,7 +615,7 @@ def make_output(template_upload, records, qc_rows):
         if item.get("notes"):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
-    report.append(["Carton No. / OF serial rule", "PASS", "Carton No. uses the actual CTN NO. value from the Packing List range (not the PACK NO. grouping column). The OF denominator is the carton total for that Destination only, not the combined total across all Destinations. Destination totals: " + ", ".join(f"{d}={n}" for d, n in sorted(destination_totals.items()))])
+    report.append(["Carton No. / OF serial rule", "PASS", "Serial number uses the actual CTN NO. value from the Packing List range (not the PACK NO. grouping column). Serial runs continuously across all Destinations, and OF always shows the combined total of all generated cartons (e.g. 1 OF 259 through 259 OF 259)."])
     packing_orders = sorted({text(rec["order"]) for rec in records if text(rec.get("order"))})
     format_order_text = ", ".join(sorted(format_orders)) if format_orders else "not found in Format"
     report.append(["Order No. rule", "PASS", f"Packing List Order No. used: {', '.join(packing_orders)}. Format Order No. ({format_order_text}) is reference only and is NOT used to reject/pair files. Files are paired by Style No."])
@@ -709,7 +706,7 @@ def get_format_styles(upload):
     return next(iter(styles))
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.6")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.7")
 st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software শুধু Style No. মিলিয়ে pair করবে; Packing List ও Format-এর Order No. আলাদা হলেও Format reject করবে না। Output-এ Packing List-এর Order No. বসবে এবং QC REPORT-এ এই নিয়ম দেখাবে। প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_files = st.file_uploader(
     "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
