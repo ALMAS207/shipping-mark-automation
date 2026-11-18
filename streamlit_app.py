@@ -353,6 +353,48 @@ def make_output(template_upload, records, qc_rows):
                 return dest
         return ""
 
+    def labelled_value(sheet, label):
+        wanted = norm_key(label)
+        for row in sheet.iter_rows():
+            for cell in row:
+                if norm_key(cell.value) == wanted:
+                    for col in range(cell.column + 1, sheet.max_column + 1):
+                        value = sheet.cell(cell.row, col).value
+                        if value is not None and text(value).strip():
+                            return value
+        return None
+
+    def labelled_cell(sheet, label):
+        wanted = norm_key(label)
+        for row in sheet.iter_rows():
+            for cell in row:
+                if norm_key(cell.value) == wanted:
+                    return cell
+        return None
+
+    def sheet_destination(sheet):
+        # Destination may be in B2, B3, or another cell depending on customer format.
+        for row in sheet.iter_rows():
+            for cell in row:
+                dest = destination_key(cell.value)
+                if dest:
+                    return dest
+        return destination_key(sheet.title)
+
+    def write_label(sheet, label, value):
+        cell = labelled_cell(sheet, label)
+        if cell is None:
+            return False
+        # Keep label position and write into the first value cell to its right.
+        for col in range(cell.column + 1, sheet.max_column + 1):
+            target = sheet.cell(cell.row, col)
+            if target.value is not None and norm_key(target.value) in {"OF", "UNITS", "KGS"}:
+                continue
+            target.value = value
+            return True
+        sheet.cell(cell.row, cell.column + 1).value = value
+        return True
+
     # Format workbook uses numbered carton sheets (e.g. SYDNEY_001),
     # not sheets named "AU SYDNEY MASTER". Use B2 for destination and C6 for style.
     format_measurements = {}
@@ -374,10 +416,10 @@ def make_output(template_upload, records, qc_rows):
 
     for candidate in wb.worksheets:
         data_sheet = data_wb[candidate.title]
-        # Master sheet names are explicit in the template; B2 may be a formula,
-        # so use the sheet title as a fallback destination identifier.
-        dest = destination_key(data_sheet["B2"].value) or destination_key(candidate.title)
-        style_key = norm_key(data_sheet["C6"].value)
+        # Customer formats may use numbered CARTON sheets with destination and
+        # labelled metadata in different rows/columns. Detect by cell labels/content.
+        dest = sheet_destination(data_sheet)
+        style_key = norm_key(labelled_value(data_sheet, "STYLE NO."))
         if dest:
             current_base = destination_bases.get(dest)
             title_key = norm_key(candidate.title)
@@ -394,9 +436,9 @@ def make_output(template_upload, records, qc_rows):
         key = (dest, style_key)
         format_bases.setdefault(key, candidate)
 
-        issue_key = pack_key(data_sheet["C8"].value)
-        blister_key = pack_key(data_sheet["C9"].value)
-        measurement = clean_measurement(data_sheet["C13"].value)
+        issue_key = pack_key(labelled_value(data_sheet, "QTY ISSUE PACK"))
+        blister_key = pack_key(labelled_value(data_sheet, "QTY SHIPPER PACK"))
+        measurement = clean_measurement(labelled_value(data_sheet, "DIMENSION"))
         if issue_key and blister_key and measurement:
             measure_key = (dest, issue_key, blister_key)
             if measure_key in format_measurements and format_measurements[measure_key] != measurement:
@@ -409,7 +451,7 @@ def make_output(template_upload, records, qc_rows):
             else:
                 global_measurements[global_key] = measurement
 
-            carton_key = pack_key(data_sheet["D15"].value)
+            carton_key = pack_key(labelled_value(data_sheet, "CARTON NO."))
             if carton_key:
                 destination_carton_key = (dest, issue_key, blister_key, carton_key)
                 if (destination_carton_key in destination_carton_measurements
@@ -506,19 +548,40 @@ def make_output(template_upload, records, qc_rows):
 
         sh = wb.copy_worksheet(master)
         sh.title = f"{dest[:3]}-{int(rec['carton']):03d}"[:31]
-        sh["B2"] = "AU/" + dest
-        sh["C3"] = rec["dept"]
-        sh["C4"] = rec["order"]
-        sh["C5"] = rec["key"]
-        sh["C6"] = rec["style"]
-        sh["C7"] = rec["description"]
-        sh["C8"] = units(rec["issue"])
-        sh["C9"] = units(rec["shipper"])
-        sh["C10"] = rec["colour"]
-        sh["C11"] = rec["size"]
-        sh["C13"] = measurement
-        sh["D15"] = str(int(rec["carton"]))
-        sh["F15"] = str(total)
+        # Populate values beside their labels so varied customer layouts are supported.
+        # Destination is often a standalone cell (e.g. B3) rather than a fixed B2.
+        dest_written = False
+        for row in sh.iter_rows():
+            for cell in row:
+                if destination_key(cell.value):
+                    cell.value = "AU/" + dest
+                    dest_written = True
+                    break
+            if dest_written:
+                break
+        write_label(sh, "DEPT. NO.", rec["dept"])
+        write_label(sh, "ORDER NO.", rec["order"])
+        write_label(sh, "KEYCODE NO.", rec["key"])
+        write_label(sh, "STYLE NO.", rec["style"])
+        write_label(sh, "DESCRIPTION", rec["description"])
+        write_label(sh, "QTY ISSUE PACK", units(rec["issue"]))
+        write_label(sh, "QTY SHIPPER PACK", units(rec["shipper"]))
+        write_label(sh, "COLOUR", rec["colour"])
+        write_label(sh, "SIZE", rec["size"])
+        write_label(sh, "DIMENSION", measurement)
+        carton_cell = labelled_cell(sh, "CARTON NO.")
+        if carton_cell is not None:
+            numeric_cells = []
+            for col in range(carton_cell.column + 1, sh.max_column + 1):
+                value = sh.cell(carton_cell.row, col).value
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    numeric_cells.append(sh.cell(carton_cell.row, col))
+            if numeric_cells:
+                numeric_cells[0].value = int(rec["carton"])
+                if len(numeric_cells) > 1:
+                    numeric_cells[-1].value = total
+            else:
+                write_label(sh, "CARTON NO.", str(int(rec["carton"])))
 
         # Retain the original template's print settings and image dimensions/anchors.
         sh.sheet_view.showGridLines = master.sheet_view.showGridLines
@@ -632,7 +695,7 @@ def get_format_styles(upload):
     return next(iter(styles))
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.4")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.5")
 st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software Style No. মিলিয়ে pair করে প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_files = st.file_uploader(
     "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
