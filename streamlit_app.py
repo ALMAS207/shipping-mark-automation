@@ -398,12 +398,12 @@ def make_output(template_upload, records, qc_rows):
         blister_key = pack_key(data_sheet["C9"].value)
         measurement = clean_measurement(data_sheet["C13"].value)
         if issue_key and blister_key and measurement:
-            measure_key = (dest, style_key, issue_key, blister_key)
+            measure_key = (dest, issue_key, blister_key)
             if measure_key in format_measurements and format_measurements[measure_key] != measurement:
                 ambiguous_measurements.add(measure_key)
             else:
                 format_measurements[measure_key] = measurement
-            global_key = (style_key, issue_key, blister_key)
+            global_key = (issue_key, blister_key)
             if global_key in global_measurements and global_measurements[global_key] != measurement:
                 ambiguous_global_measurements.add(global_key)
             else:
@@ -411,14 +411,14 @@ def make_output(template_upload, records, qc_rows):
 
             carton_key = pack_key(data_sheet["D15"].value)
             if carton_key:
-                destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
+                destination_carton_key = (dest, issue_key, blister_key, carton_key)
                 if (destination_carton_key in destination_carton_measurements
                         and destination_carton_measurements[destination_carton_key] != measurement):
                     ambiguous_destination_carton_measurements.add(destination_carton_key)
                 else:
                     destination_carton_measurements[destination_carton_key] = measurement
 
-                cross_destination_key = (style_key, issue_key, blister_key, carton_key)
+                cross_destination_key = (issue_key, blister_key, carton_key)
                 if (cross_destination_key in cross_destination_carton_measurements
                         and cross_destination_carton_measurements[cross_destination_key] != measurement):
                     ambiguous_cross_destination_carton_measurements.add(cross_destination_key)
@@ -480,9 +480,9 @@ def make_output(template_upload, records, qc_rows):
         issue_key = pack_key(rec["issue"])
         blister_key = pack_key(rec["shipper"])
         carton_key = pack_key(rec["carton"])
-        measure_key = (dest, style_key, issue_key, blister_key)
-        destination_carton_key = (dest, style_key, issue_key, blister_key, carton_key)
-        cross_destination_key = (style_key, issue_key, blister_key, carton_key)
+        measure_key = (dest, issue_key, blister_key)
+        destination_carton_key = (dest, issue_key, blister_key, carton_key)
+        cross_destination_key = (issue_key, blister_key, carton_key)
 
         # Measurement is optional: resolve only when a mapping is unambiguous.
         # Never raise an error or insert a default dimension when it is missing.
@@ -497,7 +497,7 @@ def make_output(template_upload, records, qc_rows):
             measurement = format_measurements.get(measure_key, "")
 
         if not measurement:
-            global_key = (style_key, issue_key, blister_key)
+            global_key = (issue_key, blister_key)
             if global_key not in ambiguous_global_measurements:
                 measurement = global_measurements.get(global_key, "")
 
@@ -548,7 +548,7 @@ def make_output(template_upload, records, qc_rows):
     report.append(["Destination + Style", "PASS", "Exact style layout used when available; otherwise the same destination master/layout is reused for new styles"])
     for fallback_dest, fallback_style, fallback_sheet in style_fallbacks:
         report.append(["New style layout fallback", "INFO", f"{fallback_dest} / {fallback_style}: '{fallback_sheet}' layout used because no exact style sheet exists"])
-    report.append(["Measurement source", "PASS", "Exact carton number + Style + Issue Qty + Blister Qty is matched first in the same Destination; if absent, the same exact carton/Style/Qty combination is searched across other Destination sheets (Sydney, Brisbane, Perth, etc.). Only if no carton-specific entry exists is an older unambiguous quantity mapping used. If no unique match exists, Measurement remains blank; no default dimension is inserted."])
+    report.append(["Measurement source", "PASS", "Measurement rule is read generically from the uploaded Format workbook for any Style: exact carton number + Issue Qty + Shipper/Blister Qty is matched first in the same Destination; if absent, the same carton + quantities are searched across other Destination sheets. If no carton-specific entry exists, a unique quantity-based mapping in that Style Format is used. Style number is not hardcoded in the measurement rule. If no unique match exists, Measurement remains blank; no default dimension is inserted."])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original destination layout retained; logo image size, anchor/position and print settings copied from the selected template sheet"])
@@ -601,7 +601,7 @@ def get_format_styles(upload):
     return next(iter(styles))
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.2")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.3")
 st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software Style No. মিলিয়ে pair করে প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_files = st.file_uploader(
     "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
@@ -684,8 +684,8 @@ with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expa
     - Carton Range: Column A–B, Row 44 থেকে; 001 / 1 / 1.0 numeric text গ্রহণযোগ্য, output-এ leading zero বাদ যাবে
     - Colour: Column G | Keycode: Column I | Size: Column J
     - QTY ISSUE PACK ও QTY SHIPPER PACK Packing List-এর header থেকে শনাক্ত হবে
-    - Measurement Format: D15 (Carton No.), C6 (Style), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension)
-    - Measurement selection: প্রথমে একই Destination + Carton No. + Style + Issue Qty + Blister Qty; সেখানে না পেলে অন্য Destination sheet-এ একই Carton No. + Style + Qty-এর unambiguous match নেবে; না মিললে Measurement blank থাকবে এবং Shipping Mark তৈরি চলবে
+    - Measurement Format: D15 (Carton No.), C8 (QTY ISSUE PACK), C9 (QTY SHIPPER PACK/Blister), C13 (Dimension); rule is read from each uploaded Style Format and is not hardcoded to a particular Style
+    - Measurement selection: প্রতিটি Style-এর নিজস্ব uploaded Format থেকে নিয়ম পড়বে; প্রথমে একই Destination + Carton No. + Issue Qty + Shipper Qty, এরপর অন্য Destination-এ একই Carton No. + Qty, শেষে Format-এর unique Qty mapping নেবে। Style hardcode করা নেই; নতুন Style-এর Format-এর নিয়মও একইভাবে পড়বে। কোনো unique match না থাকলে Measurement blank থাকবে এবং Shipping Mark তৈরি চলবে
     - একাধিক ভিন্ন Measurement থাকলে বা কোনো match না পেলে Measurement blank থাকবে; Shipping Mark generation বন্ধ হবে না
     - সফটওয়্যার Sheet-এর Row 42–43 header মিলিয়ে Quantity ও Measurement column শনাক্ত করবে; উপরের mapping এই Packing List-এর যাচাইকৃত নিয়ম
     - Ditto mark (") আগের Colour / Keycode / Size value বহন করবে
