@@ -409,6 +409,7 @@ def make_output(template_upload, records, qc_rows):
     cross_destination_carton_measurements = {}
     ambiguous_cross_destination_carton_measurements = set()
     format_bases = {}
+    format_orders = set()
     # Destination-level fallback layout: new styles can reuse the destination master.
     destination_bases = {}
     images_by_key = {}
@@ -420,6 +421,9 @@ def make_output(template_upload, records, qc_rows):
         # labelled metadata in different rows/columns. Detect by cell labels/content.
         dest = sheet_destination(data_sheet)
         style_key = norm_key(labelled_value(data_sheet, "STYLE NO."))
+        format_order = text(labelled_value(data_sheet, "ORDER NO."))
+        if format_order:
+            format_orders.add(format_order)
         if dest:
             current_base = destination_bases.get(dest)
             title_key = norm_key(candidate.title)
@@ -608,6 +612,9 @@ def make_output(template_upload, records, qc_rows):
         if item.get("notes"):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
+    packing_orders = sorted({text(rec["order"]) for rec in records if text(rec.get("order"))})
+    format_order_text = ", ".join(sorted(format_orders)) if format_orders else "not found in Format"
+    report.append(["Order No. rule", "PASS", f"Packing List Order No. used: {', '.join(packing_orders)}. Format Order No. ({format_order_text}) is reference only and is NOT used to reject/pair files. Files are paired by Style No."])
     report.append(["Destination + Style", "PASS", "Exact style layout used when available; otherwise the same destination master/layout is reused for new styles"])
     for fallback_dest, fallback_style, fallback_sheet in style_fallbacks:
         report.append(["New style layout fallback", "INFO", f"{fallback_dest} / {fallback_style}: '{fallback_sheet}' layout used because no exact style sheet exists"])
@@ -695,8 +702,8 @@ def get_format_styles(upload):
     return next(iter(styles))
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.5")
-st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software Style No. মিলিয়ে pair করে প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.6")
+st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software শুধু Style No. মিলিয়ে pair করবে; Packing List ও Format-এর Order No. আলাদা হলেও Format reject করবে না। Output-এ Packing List-এর Order No. বসবে এবং QC REPORT-এ এই নিয়ম দেখাবে। প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_files = st.file_uploader(
     "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
     type=["xls", "xlsx", "xlsm"], accept_multiple_files=True
@@ -774,6 +781,7 @@ st.caption("AU SYDNEY master sheet-সহ Format-এর সব প্রাস�
 
 with st.expander("Software-এর নিয়ম / Automatic Column Mapping", expanded=True):
     st.markdown("""
+    - Packing List ও Format-এর Order No. আলাদা হলেও সমস্যা নেই; pair হবে Style No. দিয়ে এবং output-এ Packing List-এর Order No. বসবে
     - Destination Sheet: SYDNEY, MELBOURNE, BRISBANE, PERTH; extra space, slash, hyphen এবং AU prefix থাকলেও চিনবে
     - Carton Range: Column A–B, Row 44 থেকে; 001 / 1 / 1.0 numeric text গ্রহণযোগ্য, output-এ leading zero বাদ যাবে
     - Colour: Column G | Keycode: Column I | Size: Column J
