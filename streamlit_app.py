@@ -578,16 +578,21 @@ def make_output(template_upload, records, qc_rows):
         write_label(sh, "DIMENSION", measurement)
         carton_cell = labelled_cell(sh, "CARTON NO.")
         if carton_cell is not None:
-            numeric_cells = []
+            # Locate the literal OF separator in the same row. The template's
+            # serial cell can be text ("01"), so numeric-cell detection misses it.
+            of_cell = None
             for col in range(carton_cell.column + 1, sh.max_column + 1):
-                value = sh.cell(carton_cell.row, col).value
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    numeric_cells.append(sh.cell(carton_cell.row, col))
-            if numeric_cells:
-                numeric_cells[0].value = int(rec["carton"])
-                if len(numeric_cells) > 1:
-                    numeric_cells[-1].value = total
+                candidate = sh.cell(carton_cell.row, col)
+                if norm_key(candidate.value) == "OF":
+                    of_cell = candidate
+                    break
+            if of_cell is not None:
+                serial_cell = sh.cell(of_cell.row, of_cell.column - 1)
+                denominator_cell = sh.cell(of_cell.row, of_cell.column + 1)
+                serial_cell.value = int(rec["carton"])
+                denominator_cell.value = total
             else:
+                # Fallback for formats without a literal OF separator.
                 write_label(sh, "CARTON NO.", str(int(rec["carton"])))
 
         # Retain the original template's print settings and image dimensions/anchors.
@@ -615,7 +620,7 @@ def make_output(template_upload, records, qc_rows):
         if item.get("notes"):
             report.append([f"{item['destination']} auto-fix log", "INFO", "; ".join(item["notes"])])
     report.append(["Total generated labels", "PASS", str(total)])
-    report.append(["Carton No. / OF serial rule", "PASS", "Serial number uses the actual CTN NO. value from the Packing List range (not the PACK NO. grouping column). Serial runs continuously across all Destinations, and OF always shows the combined total of all generated cartons (e.g. 1 OF 259 through 259 OF 259)."])
+    report.append(["Carton No. / OF serial rule", "PASS", "Serial number cell immediately before the literal OF separator is populated from the actual CTN NO. value in the Packing List range (A:B), not the PACK NO. grouping column. OF denominator cell immediately after OF always shows the combined total of all generated cartons (e.g. 1 OF 259 through 259 OF 259). The writer locates the OF separator instead of relying on numeric-cell detection, because the template serial cell may be stored as text."])
     packing_orders = sorted({text(rec["order"]) for rec in records if text(rec.get("order"))})
     format_order_text = ", ".join(sorted(format_orders)) if format_orders else "not found in Format"
     report.append(["Order No. rule", "PASS", f"Packing List Order No. used: {', '.join(packing_orders)}. Format Order No. ({format_order_text}) is reference only and is NOT used to reject/pair files. Files are paired by Style No."])
@@ -706,7 +711,7 @@ def get_format_styles(upload):
     return next(iter(styles))
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.7")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.8")
 st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software শুধু Style No. মিলিয়ে pair করবে; Packing List ও Format-এর Order No. আলাদা হলেও Format reject করবে না। Output-এ Packing List-এর Order No. বসবে এবং QC REPORT-এ এই নিয়ম দেখাবে। প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_files = st.file_uploader(
     "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
