@@ -307,10 +307,10 @@ def build_records(upload):
         count_mismatch = expected_cartons is not None and expected_cartons != made_here
         qc.append({"destination": dest, "generated": made_here, "expected": expected_cartons,
                    "status": "REVIEW" if count_mismatch else "PASS",
-                   "notes": list(dict.fromkeys(normalization_notes) +
+                   "notes": list(dict.fromkeys(normalization_notes +
                                  ([f"WARNING: Packing List summary says {expected_cartons} cartons, "
                                    f"but carton ranges contain {made_here}. All readable carton ranges were generated; "
-                                   "please verify the source list."] if count_mismatch else []))})
+                                   "please verify the source list."] if count_mismatch else [])))})
     if not records:
         raise ValueError("Destination Sheet-এ carton range পাওয়া যায়নি।")
     seen = set()
