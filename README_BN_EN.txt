@@ -14,15 +14,17 @@ ONLINE DEPLOY (একবারই করতে হবে)
 
 প্রতিদিন ব্যবহার
 1. Streamlit-এর পাওয়া web link খুলুন।
-2. Packing List Upload করুন (.xls / .xlsx / .xlsm)।
-3. Shipping Mark Format Upload করুন (.xlsx)।
-4. Generate Shipping Mark চাপুন।
-5. Shipping Mark Excel Download করুন।
+2. প্রতিটি Style-এর Packing List আলাদা Excel ফাইল হিসেবে একসঙ্গে Upload করুন (১০–২০টি পর্যন্ত)।
+3. প্রতিটি Style-এর Shipping Mark Format-ও আলাদা Excel ফাইল হিসেবে একসঙ্গে Upload করুন।
+4. Software Style No. (Packing List header ও Format-এর C6) মিলিয়ে দুই ধরনের ফাইল pair করবে।
+5. Generate Shipping Mark চাপুন।
+6. সব Style-এর Shipping Mark ZIP ফাইল হিসেবে Download করুন। ZIP-এর ভিতরে প্রতিটি Style-এর আলাদা Excel এবং QC REPORT থাকবে।
 6. Download করা Excel-এর QC REPORT এবং কয়েকটি label মিলিয়ে নিন।
 
 SUPPORTED INPUT
-- Packing List: .XLS, .XLSX, .XLSM
-- Shipping Mark Template: .XLSX
+- একসঙ্গে একাধিক Packing List: .XLS, .XLSX, .XLSM (প্রতি ফাইলে একটি Style)
+- একসঙ্গে একাধিক Shipping Mark Format: .XLSX (প্রতি ফাইলে একটি Style)
+- Pairing: Style No. দিয়ে স্বয়ংক্রিয়ভাবে মিলানো হয়; missing বা duplicate Style pair হলে Generate বন্ধ করে QC error দেখায়
 - Destination sheets: SYDNEY, MELBOURNE, BRISBANE, PERTH
 
 CURRENT DATA MAPPING
