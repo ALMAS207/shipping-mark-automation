@@ -585,23 +585,54 @@ def get_packing_style(upload):
     return next(iter(styles))
 
 def get_format_styles(upload):
+    """Read the Style No. from the labelled field, not blindly from C6.
+    Some customer formats place Keycode in C6, so numeric C6 values must
+    never be mistaken for a Style No.
+    """
     data = upload.getvalue()
     book = load_workbook(BytesIO(data), data_only=True, read_only=True)
     styles = set()
     for sh in book.worksheets:
-        value = text(sh["C6"].value)
-        if value:
-            styles.add(re.sub(r"[^A-Z0-9]", "", value.upper()))
+        found = ""
+        max_row = min(sh.max_row or 0, 45)
+        max_col = min(sh.max_column or 0, 12)
+        for row in sh.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+            for cell in row:
+                label = re.sub(r"[^A-Z0-9]", "", text(cell.value).upper())
+                if label in {"STYLENO", "STYLENUMBER", "STYLE"}:
+                    # Usually the value is to the right of the STYLE NO. label.
+                    for col in range(cell.column + 1, min(max_col, cell.column + 5) + 1):
+                        candidate = text(sh.cell(cell.row, col).value)
+                        if candidate:
+                            found = candidate
+                            break
+                    # Some formats put the value directly below the label.
+                    if not found and cell.row < max_row:
+                        found = text(sh.cell(cell.row + 1, cell.column).value)
+                    if found:
+                        break
+            if found:
+                break
+        if not found:
+            # Legacy template fallback: C6 is only accepted when it contains
+            # letters as well as digits (e.g. 11NSBK153), not a numeric keycode.
+            candidate = text(sh["C6"].value)
+            if re.search(r"[A-Z]", candidate.upper()) and re.search(r"\\d", candidate):
+                found = candidate
+        if found:
+            styles.add(re.sub(r"[^A-Z0-9]", "", found.upper()))
     book.close()
     if len(styles) != 1:
         raise ValueError(
-            f"{upload.name}: Format Excel-এ একটি Style থাকা দরকার; পাওয়া গেছে: "
-            + (", ".join(sorted(styles)) if styles else "C6-এ কোনো Style No. নেই")
+            f"{upload.name}: Format Excel থেকে একটি নির্ভরযোগ্য Style No. শনাক্ত করা যায়নি। "
+            + ("পাওয়া গেছে: " + ", ".join(sorted(styles)) if styles else
+               "STYLE NO. লেখা/মান পাওয়া যায়নি।")
+            + " Format-এ STYLE NO. label ও তার পাশের value যাচাই করুন।"
         )
     return next(iter(styles))
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.3")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.4")
 st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software Style No. মিলিয়ে pair করে প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_files = st.file_uploader(
     "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
