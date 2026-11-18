@@ -2,6 +2,7 @@ import re
 from copy import copy, deepcopy
 from io import BytesIO
 from pathlib import Path
+import zipfile
 
 import streamlit as st
 import xlrd
@@ -569,30 +570,109 @@ def make_output(template_upload, records, qc_rows):
     return output.getvalue(), image_count
 
 
-st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.1")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
-packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
-format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
+def get_packing_style(upload):
+    sheets = read_sheets(upload)
+    styles = set()
+    for rows in sheets.values():
+        _, style, _, _ = metadata(rows)
+        if style:
+            styles.add(re.sub(r"[^A-Z0-9]", "", style.upper()))
+    if len(styles) != 1:
+        raise ValueError(
+            f"{upload.name}: একটি Packing List-এ একটি Style থাকার কথা; পাওয়া গেছে: "
+            + (", ".join(sorted(styles)) if styles else "কোনো Style No. পাওয়া যায়নি")
+        )
+    return next(iter(styles))
 
-if st.button("🚀 Generate Shipping Mark", type="primary", use_container_width=True):
-    if not packing_file or not format_file:
-        st.error("Packing List এবং Shipping Mark Format—দুটি ফাইলই Upload করুন।")
+def get_format_styles(upload):
+    data = upload.getvalue()
+    book = load_workbook(BytesIO(data), data_only=True, read_only=True)
+    styles = set()
+    for sh in book.worksheets:
+        value = text(sh["C6"].value)
+        if value:
+            styles.add(re.sub(r"[^A-Z0-9]", "", value.upper()))
+    book.close()
+    if len(styles) != 1:
+        raise ValueError(
+            f"{upload.name}: Format Excel-এ একটি Style থাকা দরকার; পাওয়া গেছে: "
+            + (", ".join(sorted(styles)) if styles else "C6-এ কোনো Style No. নেই")
+        )
+    return next(iter(styles))
+
+st.title("📦 Shipping Mark Automation Pro")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.2")
+st.info("একসঙ্গে একাধিক Style-এর আলাদা Packing List ও আলাদা Shipping Mark Format Upload করুন। Software Style No. মিলিয়ে pair করে প্রতিটি Style-এর Excel একটি ZIP ফাইলে দেবে। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে readable carton ranges generate হবে এবং QC REPORT-এ REVIEW warning দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
+packing_files = st.file_uploader(
+    "১. Packing List Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল (একসঙ্গে ১০–২০টি)",
+    type=["xls", "xlsx", "xlsm"], accept_multiple_files=True
+)
+format_files = st.file_uploader(
+    "২. Shipping Mark Format Excel — প্রতিটি Style-এর জন্য আলাদা ফাইল",
+    type=["xlsx"], accept_multiple_files=True
+)
+
+if st.button("🚀 সব Style-এর Shipping Mark তৈরি করুন", type="primary", use_container_width=True):
+    if not packing_files or not format_files:
+        st.error("Packing List এবং Shipping Mark Format—দুই ধরনের ফাইলই Upload করুন।")
     else:
         try:
-            with st.spinner("Packing List-এর Sheet/Header শনাক্ত করে Shipping Mark তৈরি হচ্ছে..."):
-                records, qc_rows = build_records(packing_file)
-                output, image_count = make_output(format_file, records, qc_rows)
-            st.success(f"সফল! মোট {len(records)}টি carton label তৈরি হয়েছে।")
-            st.caption(f"Template-এর {image_count}টি image/logo original size ও position-এ রাখা হয়েছে।")
-            st.download_button("⬇️ Shipping Mark Excel Download", data=output,
-                file_name=f"{Path(packing_file.name).stem}_Shipping_Mark.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
-            st.warning("Print করার আগে QC REPORT এবং কয়েকটি label Packing List-এর সঙ্গে মিলিয়ে নিন।")
+            with st.spinner("Style No. মিলিয়ে Packing List ও Format জোড়া লাগানো হচ্ছে..."):
+                packing_by_style = {}
+                for pf in packing_files:
+                    style_key = get_packing_style(pf)
+                    if style_key in packing_by_style:
+                        raise ValueError(
+                            f"একই Style No. {style_key} একাধিক Packing List-এ আছে। "
+                            "ফাইলগুলো আলাদা করে দিন; একই Style-এর একাধিক Order হলে আগে QC করে pair নির্ধারণ করতে হবে।"
+                        )
+                    packing_by_style[style_key] = pf
+
+                format_by_style = {}
+                for ff in format_files:
+                    style_key = get_format_styles(ff)
+                    if style_key in format_by_style:
+                        raise ValueError(f"Style {style_key}-এর একাধিক Format পাওয়া গেছে।")
+                    format_by_style[style_key] = ff
+
+                missing_formats = sorted(set(packing_by_style) - set(format_by_style))
+                extra_formats = sorted(set(format_by_style) - set(packing_by_style))
+                if missing_formats:
+                    raise ValueError("এই Style-এর Format পাওয়া যায়নি: " + ", ".join(missing_formats))
+                if extra_formats:
+                    raise ValueError("এই Format-এর matching Packing List পাওয়া যায়নি: " + ", ".join(extra_formats))
+
+                zip_buffer = BytesIO()
+                total_labels = 0
+                completed = []
+                with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    for style_key, pf in packing_by_style.items():
+                        ff = format_by_style[style_key]
+                        records, qc_rows = build_records(pf)
+                        output, image_count = make_output(ff, records, qc_rows)
+                        output_name = f"{Path(pf.name).stem}_Shipping_Mark.xlsx"
+                        archive.writestr(output_name, output)
+                        total_labels += len(records)
+                        completed.append((style_key, len(records), image_count, output_name))
+
+            zip_buffer.seek(0)
+            st.success(
+                f"সফল! {len(completed)}টি Style-এর মোট {total_labels}টি carton label তৈরি হয়েছে। "
+                "প্রতিটি Style-এর জন্য আলাদা Excel ফাইল ZIP-এর মধ্যে আছে।"
+            )
+            for style_key, label_count, image_count, output_name in completed:
+                st.write(f"• Style {style_key}: {label_count}টি Label | {image_count}টি Template image/logo")
+            st.download_button(
+                "⬇️ সব Style-এর Shipping Mark ZIP Download",
+                data=zip_buffer.getvalue(),
+                file_name="All_Styles_Shipping_Marks.zip",
+                mime="application/zip",
+                use_container_width=True
+            )
+            st.warning("প্রতিটি Excel-এর QC REPORT এবং কয়েকটি label Packing List-এর সঙ্গে মিলিয়ে Print করুন।")
         except Exception as e:
             st.error(f"Shipping Mark তৈরি হয়নি: {e}")
-            st.info("ভুল mapping হলে Excel-এর header অনুযায়ী শনাক্তকরণ উন্নত করতে হবে; কোনো তথ্য অনুমান করে পূরণ করা হয় না।")
+            st.info("Software Style No. দিয়ে Packing List ও Format pair করে। একই Style-এর একাধিক ফাইল থাকলে ambiguous pair আটকাবে; অনুমান করে ভুল Format ব্যবহার করবে না।")
 
 st.divider()
 st.caption("প্রতিদিন নতুন Order-এর Packing List (.XLS/.XLSX/.XLSM) এবং Shipping Mark Format (.XLSX) Upload করলেই তৈরি হবে। Destination sheet-এর নামের extra space, slash, hyphen এবং AU prefix উপেক্ষা হবে; Carton range-এ 001 / 1 / 1.0 numeric text গ্রহণযোগ্য এবং output carton number-এ leading zero বাদ যাবে; Format-এর numbered sheet থেকে Destination + Style অনুযায়ী layout এবং Blister Qty অনুযায়ী Measurement নেওয়া হবে।")
