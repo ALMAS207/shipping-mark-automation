@@ -8,7 +8,7 @@ ONLINE DEPLOY (একবারই করতে হবে)
 3. Create app / Deploy an app নির্বাচন করুন।
 4. Repository: ALMAS207/shipping-mark-automation
 5. Branch: main
-6. Main file path: app.py
+6. Main file path: streamlit_app.py
 7. Deploy চাপুন এবং build শেষ হওয়া পর্যন্ত অপেক্ষা করুন।
 8. Deploy শেষ হলে Streamlit একটি web link দেবে। সেই link Chrome-এ Bookmark করে রাখুন।
 
@@ -33,7 +33,7 @@ CURRENT DATA MAPPING
 - Size: Column J
 - QTY ISSUE PACK: Column M
 - QTY SHIPPER PACK: Column Q
-- Carton Measurement: Column V; dimensions and unit only (example: 54X45X30 CM)
+- Carton Measurement: Shipping Mark Format-এর matching sheet থেকে; dimensions and unit only (example: 54X45X30 CM). No unique match হলে blank থাকবে; কোনো default dimension বসবে না।
 - Colour / Keycode / Size ditto marks: previous valid value carried forward
 - One label per carton
 - Hanger Logo image size and anchor copied from the selected format
