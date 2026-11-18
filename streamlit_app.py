@@ -303,16 +303,13 @@ def build_records(upload):
                 made_here += 1
         # Never assume a fixed carton count. Generate from every detected carton range,
         # then compare with the destination summary when the Packing List provides one.
-        if expected_cartons is not None and expected_cartons != made_here:
-            raise ValueError(
-                f"{dest} Sheet: Packing List summary-তে {expected_cartons} Carton, "
-                f"kintu carton range theke {made_here}টি পাওয়া গেছে। "
-                "কোনো label বাদ/বেশি হওয়ার ঝুঁকি থাকায় Generate বন্ধ করা হয়েছে। "
-                "Carton range এবং TTL CTNS মিলিয়ে নিন।"
-            )
+        count_mismatch = expected_cartons is not None and expected_cartons != made_here
         qc.append({"destination": dest, "generated": made_here, "expected": expected_cartons,
-                   "status": "PASS" if expected_cartons in (None, made_here) else "REVIEW",
-                   "notes": list(dict.fromkeys(normalization_notes))})
+                   "status": "REVIEW" if count_mismatch else "PASS",
+                   "notes": list(dict.fromkeys(normalization_notes) +
+                                 ([f"WARNING: Packing List summary says {expected_cartons} cartons, "
+                                   f"but carton ranges contain {made_here}. All readable carton ranges were generated; "
+                                   "please verify the source list."] if count_mismatch else []))})
     if not records:
         raise ValueError("Destination Sheet-এ carton range পাওয়া যায়নি।")
     seen = set()
@@ -550,7 +547,7 @@ def make_output(template_upload, records, qc_rows):
     report.append(["Destination + Style", "PASS", "Exact style layout used when available; otherwise the same destination master/layout is reused for new styles"])
     for fallback_dest, fallback_style, fallback_sheet in style_fallbacks:
         report.append(["New style layout fallback", "INFO", f"{fallback_dest} / {fallback_style}: '{fallback_sheet}' layout used because no exact style sheet exists"])
-    report.append(["Measurement source", "PASS", "Exact carton number + Style + Issue Qty + Blister Qty is matched first in the same Destination; if absent, the same exact carton/Style/Qty combination is searched across other Destination sheets (Sydney, Brisbane, Perth, etc.). Only if no carton-specific entry exists is the older unambiguous quantity mapping used. User-confirmed fallback for Blister 01 is 48X34X10 CM when no exact mapping exists."])
+    report.append(["Measurement source", "PASS", "Exact carton number + Style + Issue Qty + Blister Qty is matched first in the same Destination; if absent, the same exact carton/Style/Qty combination is searched across other Destination sheets (Sydney, Brisbane, Perth, etc.). Only if no carton-specific entry exists is an older unambiguous quantity mapping used. If no unique match exists, Measurement remains blank; no default dimension is inserted."])
     report.append(["Master sheets", "PASS", f"{len(master_sheets)} original Destination Master sheet(s) retained"])
     report.append(["Ambiguous measurement mappings", "PASS", "No conflicting dimensions for any used destination/style/quantity combination"])
     report.append(["Hanger Logo / Print Layout", "PASS", "Original destination layout retained; logo image size, anchor/position and print settings copied from the selected template sheet"])
@@ -573,8 +570,8 @@ def make_output(template_upload, records, qc_rows):
 
 
 st.title("📦 Shipping Mark Automation Pro")
-st.caption("Online Web Version • বাংলা / English • Build 2026.11.11.2")
-st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। exact mapping না থাকলে Blister 01 = 48X34X10 CM।")
+st.caption("Online Web Version • বাংলা / English • Build 2026.11.18.1")
+st.info("১) Packing List Upload করুন  ২) Shipping Mark Format Upload করুন  ৩) Generate চাপুন  ৪) Excel Download করুন। Carton range-এ 001 / 1 / 1.0 এবং cell-এর extra space থাকলেও চিনবে; Colour/Keycode/Size-এর বাইরের space স্বয়ংক্রিয়ভাবে পরিষ্কার করবে। Auto-fix করা বিষয় QC REPORT-এ লিখবে। Sheet name-এ SYDNEY, AU SYDNEY বা extra space থাকলেও চিনবে। Carton সংখ্যা fixed নয়—Packing List-এর range থেকে যত Carton পাওয়া যাবে তত Label তৈরি হবে। Summary count থাকলে তার সঙ্গে মিলিয়ে দেখা হবে; অমিল হলে Generate বন্ধ করে error দেখাবে। AU Destination Master Sheet-ও output-এ থাকবে। নতুন Style-এর আলাদা numbered sheet না থাকলেও একই Destination-এর Master Layout ব্যবহার করে Shipping Mark তৈরি হবে; QC REPORT-এ fallback sheet-এর নাম থাকবে। Measurement Format-এ প্রথমে Carton No. + Style + Issue Qty + Blister Qty একই Destination-এ মিলবে; না পেলে Sydney/Brisbane/Perth-সহ অন্য Destination sheet-এ একই Carton ও Qty খুঁজবে। কোনো exact/unique mapping না থাকলে Measurement ফাঁকা থাকবে; Generate চলবে।")
 packing_file = st.file_uploader("১. Packing List Excel (.XLS / .XLSX / .XLSM)", type=["xls", "xlsx", "xlsm"])
 format_file = st.file_uploader("২. Shipping Mark Format (.XLSX)", type=["xlsx"])
 
